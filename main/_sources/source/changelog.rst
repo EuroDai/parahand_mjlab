@@ -8,6 +8,15 @@ Upcoming version (not yet released)
 Added
 ^^^^^
 
+- Added the ``Mjlab-Grasp-Object-ParaHand`` task with separate ParaHand robot and
+  grasp-object entities, joint and tendon actions, contact sensing, and PPO training
+  configuration. Its initial object curriculum uniformly distributes fixed box,
+  sphere, and capsule mesh variants across parallel worlds, then randomizes only
+  object reset position and orientation. Its actor and critic use a shared-per-point
+  PointNet architecture before their MLP heads.
+- Added ``PointNetModel`` support to RSL-RL model configuration for history-aware
+  point-cloud observation encoding.
+
 Changed
 ^^^^^^^
 
