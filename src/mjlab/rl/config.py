@@ -20,6 +20,8 @@ class RslRlModelCfg:
   Passed to ``rsl_rl.modules.CNN``. Common keys: output_channels,
   kernel_size, stride, padding, activation, global_pool, max_pool.
   """
+  pointnet_cfg: dict[str, Any] | None = None
+  """PointNet encoder config for ``mjlab.rl.pointnet.PointNetModel``."""
   distribution_cfg: dict[str, Any] | None = None
   """Distribution config dict passed to rsl_rl. Example::
 

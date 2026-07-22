@@ -682,6 +682,16 @@ def test_joint_pos_none_uses_model_keyframe():
   assert model.key(0).qpos[7] == 0.5  # joint1 position
 
 
+def test_joint_pos_none_default_state_uses_sim_dtype(device):
+  cfg = EntityCfg(
+    init_state=EntityCfg.InitialStateCfg(joint_pos=None),
+    spec_fn=lambda: mujoco.MjSpec.from_string(XML_WITH_KEYFRAME),
+  )
+  entity, sim = initialize_entity_with_sim(Entity(cfg), device)
+
+  assert entity.data.default_joint_pos.dtype == sim.data.qpos.dtype
+
+
 def test_joint_pos_none_errors_without_keyframe():
   """Test that joint_pos=None raises error if model has no keyframe."""
   cfg = EntityCfg(
