@@ -79,7 +79,7 @@ def test_training_config_matches_playground_horizon_and_ppo_settings():
   assert agent_cfg.algorithm.value_loss_coef == 0.5
   assert not agent_cfg.algorithm.use_clipped_value_loss
   assert agent_cfg.actor.distribution_cfg == {
-    "class_name": "mjlab.rl.distributions:TanhGaussianDistribution",
-    "min_std": 0.001,
-    "var_scale": 1.0,
+    "class_name": "GaussianDistribution",
+    "init_std": 1.0,
+    "std_type": "scalar",
   }

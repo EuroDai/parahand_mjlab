@@ -15,9 +15,9 @@ def parahand_grasp_object_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
         "feature_dims": (32, 64, 128),
       },
       distribution_cfg={
-        "class_name": "mjlab.rl.distributions:TanhGaussianDistribution",
-        "min_std": 0.001,
-        "var_scale": 1.0,
+        "class_name": "GaussianDistribution",
+        "init_std": 1.0,
+        "std_type": "scalar",
       },
     ),
     critic=RslRlModelCfg(
