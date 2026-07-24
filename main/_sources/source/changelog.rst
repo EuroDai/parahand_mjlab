@@ -10,16 +10,41 @@ Added
 
 - Added the ``Mjlab-Grasp-Object-ParaHand`` task with separate ParaHand robot and
   grasp-object entities, joint and tendon actions, contact sensing, and PPO training
-  configuration. Its initial object curriculum uniformly distributes fixed box,
-  sphere, and capsule mesh variants across parallel worlds, then randomizes only
-  object reset position and orientation. Its actor and critic use a shared-per-point
-  PointNet architecture before their MLP heads.
+  configuration. Its actor and critic use a shared-per-point PointNet architecture
+  before their MLP heads.
 - Added ``PointNetModel`` support to RSL-RL model configuration for history-aware
   point-cloud observation encoding.
+- Added the ``Mjlab-Grasp-Object-ParaHand-Only`` task for the standalone ParaHand.
+  Its palm translation actions use a scale of 0.002, palm rotation actions use
+  0.01, and its target workspace is centered at the world origin. Its object starts
+  from the standalone XML cube's home position. Its hand bodies, joints, and
+  actuators use the same names as the FR3-mounted ParaHand; the standalone
+  ``wrist_origin`` site remains distinct.
+- Added play-only visualization of the ParaHand actor's sampled object point cloud
+  using debug spheres. Training configurations do not register the visualizer.
 
 Changed
 ^^^^^^^
 
+- The ParaHand grasp task now uses three lessons. It starts with a single nominal
+  cube at a fixed position and yaw, a fixed target, and a shared fixed set of 64
+  surface points. The second lesson enables position, yaw, target, shape, size, and
+  per-episode point sampling randomization. It uses uniformly distributed box,
+  sphere, and capsule variants with sizes from 0.75 to 1.5 times nominal. The final
+  lesson additionally enables per-observation point-cloud resampling. Each promotion
+  requires an independent rolling final-pose success rate of 85%, using the Isaac
+  Dexsuite Lift criterion of less than 5 cm position error.
+- The standalone ParaHand PPO configuration now uses a fixed 0.0003 learning rate
+  and a Beta action distribution bounded to -1--1. This prevents the policy mean
+  from drifting outside the environment's action range. Its palm translation axes
+  now make the x and y actuator names correspond to world x and y motion.
+- The ParaHand grasp tasks now enable the simulation NaN guard by default so
+  divergent physics states are captured for diagnosis.
+- The standalone ParaHand reset now preserves the XML ``home`` keyframe, including
+  the palm height and tendon targets, and places the task object at the XML demo
+  cube position. Joint reset randomization starts in the second curriculum lesson.
+- The play command accepts ``--episode-length-s`` to evaluate policies with the
+  same reset horizon used during training.
 - The Viser reward bar panel's term cap is now configurable via
   ``ViewerConfig.reward_bar_max_terms``, so environments with more than 20
   reward terms can show them all. Defaults to 20, preserving previous behavior.

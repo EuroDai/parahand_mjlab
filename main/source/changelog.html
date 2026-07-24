@@ -58,7 +58,7 @@
     <link rel="prev" title="Research" href="research.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Jul 22, 2026"/>
+    <meta name="docbuild:last-update" content="Jul 24, 2026"/>
   </head>
   
   
@@ -535,17 +535,42 @@ document.write(`
 <ul class="simple">
 <li><p>Added the <code class="docutils literal notranslate"><span class="pre">Mjlab-Grasp-Object-ParaHand</span></code> task with separate ParaHand robot and
 grasp-object entities, joint and tendon actions, contact sensing, and PPO training
-configuration. Its initial object curriculum uniformly distributes fixed box,
-sphere, and capsule mesh variants across parallel worlds, then randomizes only
-object reset position and orientation. Its actor and critic use a shared-per-point
-PointNet architecture before their MLP heads.</p></li>
+configuration. Its actor and critic use a shared-per-point PointNet architecture
+before their MLP heads.</p></li>
 <li><p>Added <code class="docutils literal notranslate"><span class="pre">PointNetModel</span></code> support to RSL-RL model configuration for history-aware
 point-cloud observation encoding.</p></li>
+<li><p>Added the <code class="docutils literal notranslate"><span class="pre">Mjlab-Grasp-Object-ParaHand-Only</span></code> task for the standalone ParaHand.
+Its palm translation actions use a scale of 0.002, palm rotation actions use
+0.01, and its target workspace is centered at the world origin. Its object starts
+from the standalone XML cube’s home position. Its hand bodies, joints, and
+actuators use the same names as the FR3-mounted ParaHand; the standalone
+<code class="docutils literal notranslate"><span class="pre">wrist_origin</span></code> site remains distinct.</p></li>
+<li><p>Added play-only visualization of the ParaHand actor’s sampled object point cloud
+using debug spheres. Training configurations do not register the visualizer.</p></li>
 </ul>
 </section>
 <section id="changed">
 <h3>Changed<a class="headerlink" href="#changed" title="Link to this heading">#</a></h3>
 <ul class="simple">
+<li><p>The ParaHand grasp task now uses three lessons. It starts with a single nominal
+cube at a fixed position and yaw, a fixed target, and a shared fixed set of 64
+surface points. The second lesson enables position, yaw, target, shape, size, and
+per-episode point sampling randomization. It uses uniformly distributed box,
+sphere, and capsule variants with sizes from 0.75 to 1.5 times nominal. The final
+lesson additionally enables per-observation point-cloud resampling. Each promotion
+requires an independent rolling final-pose success rate of 85%, using the Isaac
+Dexsuite Lift criterion of less than 5 cm position error.</p></li>
+<li><p>The standalone ParaHand PPO configuration now uses a fixed 0.0003 learning rate
+and a Beta action distribution bounded to -1–1. This prevents the policy mean
+from drifting outside the environment’s action range. Its palm translation axes
+now make the x and y actuator names correspond to world x and y motion.</p></li>
+<li><p>The ParaHand grasp tasks now enable the simulation NaN guard by default so
+divergent physics states are captured for diagnosis.</p></li>
+<li><p>The standalone ParaHand reset now preserves the XML <code class="docutils literal notranslate"><span class="pre">home</span></code> keyframe, including
+the palm height and tendon targets, and places the task object at the XML demo
+cube position. Joint reset randomization starts in the second curriculum lesson.</p></li>
+<li><p>The play command accepts <code class="docutils literal notranslate"><span class="pre">--episode-length-s</span></code> to evaluate policies with the
+same reset horizon used during training.</p></li>
 <li><p>The Viser reward bar panel’s term cap is now configurable via
 <code class="docutils literal notranslate"><span class="pre">ViewerConfig.reward_bar_max_terms</span></code>, so environments with more than 20
 reward terms can show them all. Defaults to 20, preserving previous behavior.
@@ -1571,7 +1596,7 @@ By The mjlab Developers
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Jul 22, 2026.
+  Last updated on Jul 24, 2026.
   <br/>
 </p>
   </div>
