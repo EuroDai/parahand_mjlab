@@ -8,9 +8,71 @@ from mjlab.entity import Entity
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.sensor import ContactSensor
 from mjlab.tasks.manipulation.mdp.commands import LiftingCommand
+from mjlab.tasks.parahand_grasp.mdp.observations import object_point_cloud_b
 
 if TYPE_CHECKING:
   from mjlab.envs import ManagerBasedRlEnv
+  from mjlab.managers.reward_manager import RewardTermCfg
+  from mjlab.viewer.debug_visualizer import DebugVisualizer
+
+
+class object_point_cloud_debug_visualizer:
+  """Draw the actor's sampled object point cloud using debug spheres."""
+
+  def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRlEnv):
+    observation_group = cfg.params["observation_group"]
+    observation_term = cfg.params["observation_term"]
+    term_cfg = env.observation_manager.get_term_cfg(
+      observation_group,
+      observation_term,
+    )
+    if not isinstance(term_cfg.func, object_point_cloud_b):
+      raise TypeError(
+        f"Observation '{observation_group}/{observation_term}' must use "
+        "object_point_cloud_b."
+      )
+
+    self._env = env
+    self._point_cloud = term_cfg.func
+    self._radius = float(cfg.params["radius"])
+    self._color = tuple(cfg.params["color"])
+    self._debug_vis_enabled = True
+
+  def __call__(
+    self,
+    env: ManagerBasedRlEnv,
+    observation_group: str,
+    observation_term: str,
+    radius: float,
+    color: tuple[float, float, float, float],
+  ) -> torch.Tensor:
+    del observation_group, observation_term, radius, color
+    return torch.zeros(env.num_envs, device=env.device)
+
+  def reset(self, env_ids: torch.Tensor | slice | None) -> None:
+    del env_ids
+
+  def debug_vis(self, visualizer: DebugVisualizer) -> None:
+    if not self._debug_vis_enabled:
+      return
+
+    points_w = self._point_cloud.latest_points_w
+    if points_w is None:
+      return
+
+    env_indices = list(visualizer.get_env_indices(self._env.num_envs))
+    if not env_indices:
+      return
+
+    selected_points = points_w[env_indices].detach().cpu().numpy()
+    for env_idx, points in zip(env_indices, selected_points, strict=True):
+      for point_idx, point in enumerate(points):
+        visualizer.add_sphere(
+          center=point,
+          radius=self._radius,
+          color=self._color,
+          label=f"object_point_cloud_{env_idx}_{point_idx}",
+        )
 
 
 def action_l2(env: ManagerBasedRlEnv, action_names: tuple[str, ...]) -> torch.Tensor:

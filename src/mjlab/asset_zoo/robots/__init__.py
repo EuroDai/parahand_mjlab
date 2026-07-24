@@ -10,6 +10,12 @@ from mjlab.asset_zoo.robots.parahand_fr3.parahand_constants import (
 from mjlab.asset_zoo.robots.parahand_fr3.parahand_constants import (
   get_parahand_robot_cfg as get_parahand_robot_cfg,
 )
+from mjlab.asset_zoo.robots.parahand_only.parahand_only_constants import (
+  PARAHAND_ONLY_ACTION_SCALE as PARAHAND_ONLY_ACTION_SCALE,
+)
+from mjlab.asset_zoo.robots.parahand_only.parahand_only_constants import (
+  get_parahand_only_robot_cfg as get_parahand_only_robot_cfg,
+)
 from mjlab.asset_zoo.robots.unitree_g1.g1_constants import (
   G1_ACTION_SCALE as G1_ACTION_SCALE,
 )

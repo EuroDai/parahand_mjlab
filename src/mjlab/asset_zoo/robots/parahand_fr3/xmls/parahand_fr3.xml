@@ -156,24 +156,21 @@
                                             </body>
                                             <body name="index_mc" pos="0.03040 0 0.14156" euler="1.57 0 3.14">
                                                 <joint name="index_mcp_1" axis="0 0 1." class="swing_joint" range="-0.52 0.0"/>
-                                                <site name="index_tendon_0" pos="0.0 0.055 0.017" class="tendon_site"/>
-                                                <site name="index_tendon_1" pos="0.0 0.0 0.017" class="tendon_site"/>
                                                 <geom type="box" pos="0 0 0.01" size="0.001 0.001 0.002" class="visual" />
                                                 <body name="index_pp" pos="0 -0.0225000 0.014000" euler="1.57 -1.57 0">
                                                     <joint name="index_mcp_2" axis="0 0 1" class="finger_joint" />
-                                                    <site name="index_tendon_2" pos="0.01 0.005 0.0" class="tendon_site"/>
-                                                    <site name="index_tendon_3" pos="0.0345 0.008 0.0" class="tendon_site"/>
+                                                    <site name="index_tendon_pip_1" pos="0.0345 0.008 0.0" class="tendon_site"/>
                                                     <geom name="index_link_1_collision" class="link_1_collision" contype="2048" conaffinity="3285181"/>
                                                     <body name="index_mp" pos="0.04166 -0.00102 0" euler="-3.14 0 -3.14">
                                                         <inertial pos="0 0 0" mass="0.005" fullinertia="1.89e-7 9.93e-7 9.81e-7 7.1e-8 0 0"/>
                                                         <joint name="index_pip" axis="0 0 -1" class="passive_finger_joint" />
-                                                        <site name="index_tendon_4" pos="-0.007 0.006 0.0" class="tendon_site"/>
-                                                        <site name="index_tendon_5" pos="-0.0155 0.006 0.0" class="tendon_site"/>
+                                                        <site name="index_tendon_pip_2" pos="-0.007 0.006 0.0" class="tendon_site"/>
+                                                        <site name="index_tendon_dip_1" pos="-0.0155 0.006 0.0" class="tendon_site"/>
                                                         <geom name="index_link_2_collision" class="link_2_collision" contype="2048" conaffinity="3285181"/>
                                                         <body name="index_dp" pos="-0.0225 0 0" euler="-3.14 0 3.14">
                                                             <inertial pos="0 0 0" mass="0.005" fullinertia="1.93e-7 1.736e-6 1.707e-6 -1.9e-7 0 0"/>
                                                             <joint name="index_dip" axis="0 0 1" class="passive_finger_joint" />
-                                                            <site name="index_tendon_6" pos="0.007 0.006 0.0" class="tendon_site"/>
+                                                            <site name="index_tendon_dip_2" pos="0.007 0.006 0.0" class="tendon_site"/>
                                                             <geom name="index_link_3_collision" class="link_3_collision" contype="32768" conaffinity="3875005"/>
                                                             <geom name="index_tip" class="tip" contype="32768" conaffinity="3875005"/>
                                                             <site name="index_tip" class="touch_sensor" />
@@ -184,24 +181,21 @@
                                             </body>
                                             <body name="middle_mc" pos="0.00710 0 0.14306" euler="1.57 0 3.14">
                                                 <joint name="middle_mcp_1" axis="0 0 1" class="swing_joint"/>
-                                                <site name="middle_tendon_0" pos="0.0 0.05 0.017" class="tendon_site"/>
-                                                <site name="middle_tendon_1" pos="0.0 0.0 0.017" class="tendon_site"/>
                                                 <geom type="box" pos="0 0 0.01" size="0.001 0.001 0.002" class="visual" />
                                                 <body name="middle_pp" pos="0 -0.0225000 0.014000" euler="1.57 -1.57 0">
                                                     <joint name="middle_mcp_2" axis="0 0 1" class="finger_joint" />
-                                                    <site name="middle_tendon_2" pos="0.01 0.005 0.0" class="tendon_site"/>
-                                                    <site name="middle_tendon_3" pos="0.0345 0.008 0.0" class="tendon_site"/>
+                                                    <site name="middle_tendon_pip_1" pos="0.0345 0.008 0.0" class="tendon_site"/>
                                                     <geom name="middle_link_1_collision" class="link_1_collision" contype="8192" conaffinity="3250365"/>
                                                     <body name="middle_mp" pos="0.04166 -0.00102 0" euler="-3.14 0 -3.14">
                                                         <inertial pos="0 0 0" mass="0.005" fullinertia="1.89e-7 9.93e-7 9.81e-7 7.1e-8 0 0"/>
                                                         <joint name="middle_pip" axis="0 0 -1" class="passive_finger_joint"/>
-                                                        <site name="middle_tendon_4" pos="-0.007 0.006 0.0" class="tendon_site"/>
-                                                        <site name="middle_tendon_5" pos="-0.0205 0.006 0.0" class="tendon_site"/>
+                                                        <site name="middle_tendon_pip_2" pos="-0.007 0.006 0.0" class="tendon_site"/>
+                                                        <site name="middle_tendon_dip_1" pos="-0.0205 0.006 0.0" class="tendon_site"/>
                                                         <geom name="middle_link_2_collision" class="link_2_collision" pos="-0.01388 0 0" size="0.00591 0.0075 0.0065" contype="2048" conaffinity="3285181"/>
                                                         <body name="middle_dp" pos="-0.0275 0 0" euler="-3.14 0 3.14">
                                                             <inertial pos="0 0 0" mass="0.005" fullinertia="1.93e-7 1.736e-6 1.707e-6 -1.9e-7 0 0"/>
                                                             <joint name="middle_dip" axis="0 0 1" class="passive_finger_joint" />
-                                                            <site name="middle_tendon_6" pos="0.007 0.006 0.0" class="tendon_site"/>
+                                                            <site name="middle_tendon_dip_2" pos="0.007 0.006 0.0" class="tendon_site"/>
                                                             <geom name="middle_link_3_collision" class="link_3_collision" contype="131072" conaffinity="3791037"/>
                                                             <geom name="middle_tip" class="tip" contype="131072" conaffinity="3791037"/>
                                                             <site name="middle_tip" class="touch_sensor" />
@@ -212,24 +206,21 @@
                                             </body>
                                             <body name="ring_mc" pos="-0.0162 0 0.14056" euler="1.57 0 3.14">
                                                 <joint name="ring_mcp_1" axis="0 0 1" class="swing_joint" />
-                                                <site name="ring_tendon_0" pos="0.0 0.05 0.017" class="tendon_site"/>
-                                                <site name="ring_tendon_1" pos="0.0 0.0 0.017" class="tendon_site"/>
                                                 <geom type="box" pos="0 0 0.01" size="0.001 0.001 0.002" class="visual" />
                                                 <body name="ring_pp" pos="0 -0.0225000 0.014000" euler="1.57 -1.57 0">
                                                     <joint name="ring_mcp_2" axis="0 0 1" class="finger_joint" />
-                                                    <site name="ring_tendon_2" pos="0.01 0.005 0.0" class="tendon_site"/>
-                                                    <site name="ring_tendon_3" pos="0.0345 0.008 0.0" class="tendon_site"/>
+                                                    <site name="ring_tendon_pip_1" pos="0.0345 0.008 0.0" class="tendon_site"/>
                                                     <geom name="ring_link_1_collision" class="link_1_collision" contype="4096" conaffinity="3302589"/>
                                                     <body name="ring_mp" pos="0.04166 -0.00102 0" euler="-3.14 0 -3.14">
                                                         <inertial pos="0 0 0" mass="0.005" fullinertia="1.89e-7 9.93e-7 9.81e-7 7.1e-8 0 0"/>
                                                         <joint name="ring_pip" axis="0 0 -1" class="passive_finger_joint" />
-                                                        <site name="ring_tendon_4" pos="-0.007 0.006 0.0" class="tendon_site"/>
-                                                        <site name="ring_tendon_5" pos="-0.0155 0.006 0.0" class="tendon_site"/>
+                                                        <site name="ring_tendon_pip_2" pos="-0.007 0.006 0.0" class="tendon_site"/>
+                                                        <site name="ring_tendon_dip_1" pos="-0.0155 0.006 0.0" class="tendon_site"/>
                                                         <geom name="ring_link_2_collision" class="link_2_collision" contype="4096" conaffinity="3302589"/>
                                                         <body name="ring_dp" pos="-0.0225 0 0" euler="-3.14 0 3.14">
                                                             <inertial pos="0 0 0" mass="0.005" fullinertia="1.93e-7 1.736e-6 1.707e-6 -1.9e-7 0 0"/>
                                                             <joint name="ring_dip" axis="0 0 1" class="passive_finger_joint" />
-                                                            <site name="ring_tendon_6" pos="0.007 0.006 0.0" class="tendon_site"/>
+                                                            <site name="ring_tendon_dip_2" pos="0.007 0.006 0.0" class="tendon_site"/>
                                                             <geom name="ring_link_3_collision" class="link_3_collision" contype="65536" conaffinity="3859645"/>
                                                             <geom name="ring_tip" class="tip" contype="65536" conaffinity="3859645"/>
                                                             <site name="ring_tip" class="touch_sensor" />
@@ -240,24 +231,21 @@
                                             </body>
                                             <body name="little_mc" pos="-0.0393 0 0.13806" euler="1.57 0 3.14">
                                                 <joint name="little_mcp_1" axis="0 0 1" class="swing_joint" range="-0.0 0.52"/>
-                                                <site name="little_tendon_0" pos="0.0 0.05 0.017" class="tendon_site"/>
-                                                <site name="little_tendon_1" pos="0.0 0.0 0.017" class="tendon_site"/>
                                                 <geom type="box" pos="0 0 0.01" size="0.001 0.001 0.002" class="visual" />
                                                 <body name="little_pp" pos="0 -0.0225000 0.014000" euler="1.57 -1.57 0">
                                                     <joint name="little_mcp_2" axis="0 0 1" class="finger_joint" />
-                                                    <site name="little_tendon_2" pos="0.01 0.005 0.0" class="tendon_site"/>
-                                                    <site name="little_tendon_3" pos="0.0345 0.008 0.0" class="tendon_site"/>
+                                                    <site name="little_tendon_pip_1" pos="0.0345 0.008 0.0" class="tendon_site"/>
                                                     <geom name="little_link_1_collision" class="link_1_collision" contype="1024" conaffinity="2166973"/>
                                                     <body name="little_mp" pos="0.04166 -0.00102 0" euler="-3.14 0 -3.14">
                                                         <inertial pos="0 0 0" mass="0.005" fullinertia="1.89e-7 9.93e-7 9.81e-7 7.1e-8 0 0"/>
                                                         <joint name="little_pip" axis="0 0 -1" class="passive_finger_joint" />
-                                                        <site name="little_tendon_4" pos="-0.007 0.006 0.0" class="tendon_site"/>
-                                                        <site name="little_tendon_5" pos="-0.0155 0.006 0.0" class="tendon_site"/>
+                                                        <site name="little_tendon_pip_2" pos="-0.007 0.006 0.0" class="tendon_site"/>
+                                                        <site name="little_tendon_dip_1" pos="-0.0155 0.006 0.0" class="tendon_site"/>
                                                         <geom name="little_link_2_collision" class="link_2_collision" contype="1024" conaffinity="2166973"/>
                                                         <body name="little_dp" pos="-0.0225 0 0" euler="-3.14 0 3.14">
                                                             <inertial pos="0 0 0" mass="0.005" fullinertia="1.93e-7 1.736e-6 1.707e-6 -1.9e-7 0 0"/>
                                                             <joint name="little_dip" axis="0 0 1" class="passive_finger_joint" />
-                                                            <site name="little_tendon_6" pos="0.007 0.006 0.0" class="tendon_site"/>
+                                                            <site name="little_tendon_dip_2" pos="0.007 0.006 0.0" class="tendon_site"/>
                                                             <geom name="little_link_3_collision" class="link_3_collision" contype="16384" conaffinity="3870909"/>
                                                             <geom name="little_tip" class="tip" contype="16384" conaffinity="3870909"/>
                                                             <site name="little_tip" class="touch_sensor" />
@@ -308,33 +296,33 @@
     </contact>
     <tendon>
         <spatial name="index_tendon" width="0.001" rgba="0 0 1 1">
-            <site site="index_tendon_3"/>
-            <site site="index_tendon_4"/>
+            <site site="index_tendon_pip_1"/>
+            <site site="index_tendon_pip_2"/>
 			<pulley divisor="1"/>
-            <site site="index_tendon_5"/>
-            <site site="index_tendon_6"/>
+            <site site="index_tendon_dip_1"/>
+            <site site="index_tendon_dip_2"/>
         </spatial>
         <spatial name="middle_tendon" width="0.001" rgba="0 0 1 1">
-            <site site="middle_tendon_3"/>
-            <site site="middle_tendon_4"/>
+            <site site="middle_tendon_pip_1"/>
+            <site site="middle_tendon_pip_2"/>
 			
 			<pulley divisor="1"/>
-            <site site="middle_tendon_5"/>
-            <site site="middle_tendon_6"/>
+            <site site="middle_tendon_dip_1"/>
+            <site site="middle_tendon_dip_2"/>
         </spatial>
         <spatial name="ring_tendon" width="0.001" rgba="0 0 1 1">
-            <site site="ring_tendon_3"/>
-            <site site="ring_tendon_4"/>
+            <site site="ring_tendon_pip_1"/>
+            <site site="ring_tendon_pip_2"/>
 			<pulley divisor="1"/>
-            <site site="ring_tendon_5"/>
-            <site site="ring_tendon_6"/>
+            <site site="ring_tendon_dip_1"/>
+            <site site="ring_tendon_dip_2"/>
         </spatial>
         <spatial name="little_tendon" width="0.001" rgba="0 0 1 1">
-            <site site="little_tendon_3"/>
-            <site site="little_tendon_4"/>
+            <site site="little_tendon_pip_1"/>
+            <site site="little_tendon_pip_2"/>
 			<pulley divisor="1"/>
-            <site site="little_tendon_5"/>
-            <site site="little_tendon_6"/>
+            <site site="little_tendon_dip_1"/>
+            <site site="little_tendon_dip_2"/>
         </spatial>
     </tendon>
     <actuator>

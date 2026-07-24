@@ -40,6 +40,8 @@ class PlayConfig:
   checkpoint_file: str | None = None
   motion_file: str | None = None
   num_envs: int | None = None
+  episode_length_s: float | None = None
+  """Override the play episode duration in seconds."""
   device: str | None = None
   video: bool = False
   video_length: int = 200
@@ -157,6 +159,10 @@ def run_play(task_id: str, cfg: PlayConfig):
 
   if cfg.num_envs is not None:
     env_cfg.scene.num_envs = cfg.num_envs
+  if cfg.episode_length_s is not None:
+    if cfg.episode_length_s <= 0.0:
+      raise ValueError("episode_length_s must be positive.")
+    env_cfg.episode_length_s = cfg.episode_length_s
   if cfg.video_height is not None:
     env_cfg.viewer.height = cfg.video_height
   if cfg.video_width is not None:

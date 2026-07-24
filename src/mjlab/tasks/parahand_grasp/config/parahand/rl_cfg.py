@@ -33,14 +33,14 @@ def parahand_grasp_object_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       },
     ),
     algorithm=RslRlPpoAlgorithmCfg(
-      value_loss_coef=0.5,
-      use_clipped_value_loss=False,
+      value_loss_coef=1.0,
+      use_clipped_value_loss=True,
       clip_param=0.2,
       entropy_coef=0.005,
       num_learning_epochs=2,
       num_mini_batches=32,
-      learning_rate=1.0e-4,
-      schedule="fixed",
+      learning_rate=1.0e-3,
+      schedule="adaptive",
       gamma=0.99,
       lam=0.95,
       desired_kl=0.01,
@@ -56,3 +56,15 @@ def parahand_grasp_object_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       "critic": ("critic",),
     },
   )
+
+
+def parahand_only_grasp_object_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  cfg = parahand_grasp_object_ppo_runner_cfg()
+  cfg.experiment_name = "parahand_only_grasp_object"
+  cfg.actor.distribution_cfg = {
+    "class_name": "BetaDistribution",
+    "action_range": (-1.0, 1.0),
+  }
+  cfg.algorithm.learning_rate = 3.0e-4
+  cfg.algorithm.schedule = "fixed"
+  return cfg

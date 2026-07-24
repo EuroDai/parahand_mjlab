@@ -120,7 +120,7 @@ def last_actions(
 
 
 class object_point_cloud_b:
-  """Random object surface points expressed in the robot base frame."""
+  """Sampled object surface points expressed in the robot base frame."""
 
   def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRlEnv):
     self._pool_size = int(cfg.params.get("pool_size", 256))
@@ -134,6 +134,15 @@ class object_point_cloud_b:
     object_name = cfg.params.get("object_name")
     if not isinstance(object_name, str):
       raise TypeError("object_point_cloud_b requires an 'object_name'.")
+    curriculum_event_name = cfg.params.get("curriculum_event_name")
+    if not isinstance(curriculum_event_name, str):
+      raise TypeError("object_point_cloud_b requires a 'curriculum_event_name'.")
+    self._curriculum_event_cfg = env.event_manager.get_term_cfg(curriculum_event_name)
+    self._dynamic_sampling_stage = int(cfg.params.get("dynamic_sampling_stage", 2))
+    self._cache_for_visualization = bool(
+      cfg.params.get("cache_for_visualization", False)
+    )
+    self._latest_points_w: torch.Tensor | None = None
     obj: Entity = env.scene[object_name]
     variant_ids = env.sim.world_to_variant.get(object_name)
     if variant_ids is None:
@@ -166,6 +175,10 @@ class object_point_cloud_b:
           _sample_model_surface_points(source_model, self._pool_size, env.device)
         )
     self._points_local = torch.stack(point_pools)
+    self._fixed_sample_ids = torch.arange(
+      self._sample_size, device=env.device, dtype=torch.long
+    ).expand(env.num_envs, -1)
+    self._cached_sample_ids = self._fixed_sample_ids.clone()
 
   def __call__(
     self,
@@ -175,23 +188,35 @@ class object_point_cloud_b:
     pool_size: int = 256,
     sample_size: int = 64,
     flatten: bool = True,
+    curriculum_event_name: str = "reset_object_pose",
+    dynamic_sampling_stage: int = 2,
+    cache_for_visualization: bool = False,
   ) -> torch.Tensor:
+    del curriculum_event_name
     if pool_size != self._pool_size or sample_size != self._sample_size:
       raise ValueError(
         "object_point_cloud_b pool_size and sample_size cannot change after "
+        "initialization."
+      )
+    if dynamic_sampling_stage != self._dynamic_sampling_stage:
+      raise ValueError(
+        "object_point_cloud_b dynamic_sampling_stage cannot change after "
+        "initialization."
+      )
+    if cache_for_visualization != self._cache_for_visualization:
+      raise ValueError(
+        "object_point_cloud_b cache_for_visualization cannot change after "
         "initialization."
       )
 
     obj: Entity = env.scene[object_name]
     ref_asset: Entity = env.scene[ref_asset_cfg.name]
 
-    random_scores = torch.rand(
-      env.num_envs,
-      pool_size,
-      dtype=self._points_local.dtype,
-      device=env.device,
-    )
-    sample_ids = random_scores.topk(sample_size, dim=1).indices
+    curriculum_stage = int(self._curriculum_event_cfg.params["curriculum_stage"])
+    if curriculum_stage >= self._dynamic_sampling_stage:
+      sample_ids = self._draw_sample_ids(env.num_envs, env.device)
+    else:
+      sample_ids = self._cached_sample_ids
     points_local = torch.gather(
       self._points_local[self._variant_ids],
       dim=1,
@@ -202,6 +227,8 @@ class object_point_cloud_b:
     points_w = (
       quat_apply(object_quat_w, points_local) + obj.data.root_link_pos_w[:, None, :]
     )
+    if self._cache_for_visualization:
+      self._latest_points_w = points_w
     ref_quat_w_inv = quat_inv(ref_asset.data.root_link_quat_w)[:, None, :].expand(
       -1, sample_size, -1
     )
@@ -210,6 +237,36 @@ class object_point_cloud_b:
       points_w - ref_asset.data.root_link_pos_w[:, None, :],
     )
     return points_b.reshape(env.num_envs, -1) if flatten else points_b
+
+  @property
+  def latest_points_w(self) -> torch.Tensor | None:
+    """Latest sampled surface points in world coordinates for play visualization."""
+    return self._latest_points_w
+
+  def reset(self, env_ids: torch.Tensor | slice | None) -> None:
+    if env_ids is None:
+      env_ids = slice(None)
+    curriculum_stage = int(self._curriculum_event_cfg.params["curriculum_stage"])
+    if curriculum_stage == 0:
+      self._cached_sample_ids[env_ids] = self._fixed_sample_ids[env_ids]
+    else:
+      num_envs = self._cached_sample_ids[env_ids].shape[0]
+      self._cached_sample_ids[env_ids] = self._draw_sample_ids(
+        num_envs, self._cached_sample_ids.device
+      )
+
+  def _draw_sample_ids(
+    self,
+    num_envs: int,
+    device: str | torch.device,
+  ) -> torch.Tensor:
+    random_scores = torch.rand(
+      num_envs,
+      self._pool_size,
+      dtype=self._points_local.dtype,
+      device=device,
+    )
+    return random_scores.topk(self._sample_size, dim=1).indices
 
 
 def _sample_primitive_surface_points(

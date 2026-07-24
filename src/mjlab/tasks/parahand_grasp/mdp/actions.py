@@ -70,6 +70,13 @@ class _ClippedAction(BaseAction):
 
 @dataclass(kw_only=True)
 class ParaHandRelativeJointPositionActionCfg(_ClippedActionCfg):
+  coupled_finger_actuator_names: tuple[str, str, str, str] = (
+    "index_mcp_1",
+    "middle_mcp_1",
+    "ring_mcp_1",
+    "little_mcp_1",
+  )
+
   def __post_init__(self) -> None:
     self.transmission_type = TransmissionType.JOINT
 
@@ -88,10 +95,18 @@ class ParaHandRelativeJointPositionAction(_ClippedAction):
     super().__init__(cfg, env)
     self._ctrl_range = self._actuator_ctrl_range()
     target_index = {name: index for index, name in enumerate(self.target_names)}
-    self._index_mcp_1_id = target_index["index_mcp_1"]
-    self._middle_mcp_1_id = target_index["middle_mcp_1"]
-    self._ring_mcp_1_id = target_index["ring_mcp_1"]
-    self._little_mcp_1_id = target_index["little_mcp_1"]
+    missing_names = set(cfg.coupled_finger_actuator_names) - target_index.keys()
+    if missing_names:
+      raise ValueError(
+        "Coupled finger actuators are missing from the action targets: "
+        f"{sorted(missing_names)}."
+      )
+    (
+      self._index_mcp_1_id,
+      self._middle_mcp_1_id,
+      self._ring_mcp_1_id,
+      self._little_mcp_1_id,
+    ) = (target_index[name] for name in cfg.coupled_finger_actuator_names)
 
   def apply_actions(self) -> None:
     current_position = self._entity.data.joint_pos[:, self.target_ids]

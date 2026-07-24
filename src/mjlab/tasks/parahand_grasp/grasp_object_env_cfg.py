@@ -16,6 +16,7 @@ from mjlab.tasks.manipulation.mdp import LiftingCommandCfg as ObjectPoseCommandC
 from mjlab.tasks.parahand_grasp import mdp as parahand_mdp
 from mjlab.tasks.velocity import mdp
 from mjlab.terrains import TerrainEntityCfg
+from mjlab.utils.nan_guard import NanGuardCfg
 from mjlab.utils.noise import UniformNoiseCfg as Unoise
 from mjlab.viewer import ViewerConfig
 
@@ -51,7 +52,7 @@ _TENDON_NAMES = (
 _ACTION_TERM_NAMES = ("joint_pos", "tendon_length")
 _ARM_ACTION_SCALE = 0.01
 _HAND_ACTION_SCALE = 0.03
-_TENDON_ACTION_SCALE = 0.01
+_TENDON_ACTION_SCALE = 0.005
 
 
 def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
@@ -76,6 +77,8 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
         "pool_size": 256,
         "sample_size": 64,
         "flatten": True,
+        "curriculum_event_name": "reset_object_pose",
+        "dynamic_sampling_stage": 2,
       },
       noise=Unoise(n_min=-0.003, n_max=0.003),
       clip=(-2.0, 2.0),
@@ -216,11 +219,12 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
       },
     ),
     "reset_robot_joints": EventTermCfg(
-      func=mdp.reset_joints_by_offset,
+      func=parahand_mdp.reset_joints_by_curriculum,
       mode="reset",
       params={
         "position_range": (-0.05, 0.05),
         "velocity_range": (0.0, 0.0),
+        "curriculum_event_name": "reset_object_pose",
         "asset_cfg": SceneEntityCfg(
           "robot",
           joint_names=_ARM_ACTUATOR_NAMES,
@@ -236,6 +240,7 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
         "position_center": (-0.55, 0.0),
         "position_noise": (0.05, 0.1),
         "yaw_range": (-0.5 * math.pi, 0.5 * math.pi),
+        "curriculum_stage": 0,
       },
     ),
   }
@@ -334,17 +339,16 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
   }
 
   curriculum = {
-    "object_pose": CurriculumTermCfg(
-      func=parahand_mdp.object_pose_curriculum,
+    "object_lesson": CurriculumTermCfg(
+      func=parahand_mdp.object_lesson_curriculum,
       params={
         "event_name": "reset_object_pose",
-        "stages": [
-          {
-            "step": 0,
-            "position_noise": (0.05, 0.1),
-            "yaw_range": (-0.5 * math.pi, 0.5 * math.pi),
-          }
-        ],
+        "command_name": "object_pose",
+        "object_name": "object",
+        "promotion_threshold": 0.85,
+        "success_threshold": 0.05,
+        "success_window_size": 4096,
+        "min_completed_episodes": 1024,
       },
     )
   }
@@ -372,8 +376,9 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
       azimuth=120.0,
     ),
     sim=SimulationCfg(
-      nconmax=55,
-      njmax=600,
+      nconmax=100,
+      njmax=1200,
+      nan_guard=NanGuardCfg(enabled=True),
       mujoco=MujocoCfg(
         timestep=0.005,
         iterations=10,
