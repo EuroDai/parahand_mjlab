@@ -58,7 +58,7 @@
     <link rel="prev" title="Research" href="research.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Jul 24, 2026"/>
+    <meta name="docbuild:last-update" content="Jul 25, 2026"/>
   </head>
   
   
@@ -552,23 +552,29 @@ using debug spheres. Training configurations do not register the visualizer.</p>
 <section id="changed">
 <h3>Changed<a class="headerlink" href="#changed" title="Link to this heading">#</a></h3>
 <ul class="simple">
+<li><p>ParaHand relative joint and tendon actions now compute one control target per
+policy step and hold it across all simulation substeps, instead of recomputing
+the target relative to the latest state at every simulation substep.</p></li>
 <li><p>The ParaHand grasp task now uses three lessons. It starts with a single nominal
-cube at a fixed position and yaw, a fixed target, and a shared fixed set of 64
-surface points. The second lesson enables position, yaw, target, shape, size, and
-per-episode point sampling randomization. It uses uniformly distributed box,
-sphere, and capsule variants with sizes from 0.75 to 1.5 times nominal. The final
-lesson additionally enables per-observation point-cloud resampling. Each promotion
-requires an independent rolling final-pose success rate of 85%, using the Isaac
-Dexsuite Lift criterion of less than 5 cm position error.</p></li>
+cube at a randomized position with a fixed yaw and target. Every lesson resets
+controllable robot joints with noise around the XML home keyframe. Each environment
+independently samples 64 surface points at reset and keeps those points for the
+episode while updating their coordinates with the moving object. The second lesson
+enables yaw, target, shape, and size randomization. It uses uniformly distributed
+box, sphere, and capsule variants with sizes from 0.75 to 1.5 times nominal. The
+final lesson additionally enables per-observation point-cloud resampling. Actor
+and critic observations now include the object’s base-frame orientation quaternion.
+Each promotion requires an independent rolling final-pose success rate of 85%,
+using the Isaac Dexsuite Lift criterion of less than 5 cm position error.</p></li>
 <li><p>The standalone ParaHand PPO configuration now uses a fixed 0.0003 learning rate
-and a Beta action distribution bounded to -1–1. This prevents the policy mean
-from drifting outside the environment’s action range. Its palm translation axes
-now make the x and y actuator names correspond to world x and y motion.</p></li>
+and the same scalar-standard-deviation Gaussian action distribution as the
+FR3-mounted task. Its palm translation axes now make the x and y actuator names
+correspond to world x and y motion.</p></li>
 <li><p>The ParaHand grasp tasks now enable the simulation NaN guard by default so
 divergent physics states are captured for diagnosis.</p></li>
 <li><p>The standalone ParaHand reset now preserves the XML <code class="docutils literal notranslate"><span class="pre">home</span></code> keyframe, including
 the palm height and tendon targets, and places the task object at the XML demo
-cube position. Joint reset randomization starts in the second curriculum lesson.</p></li>
+cube position before applying reset randomization.</p></li>
 <li><p>The play command accepts <code class="docutils literal notranslate"><span class="pre">--episode-length-s</span></code> to evaluate policies with the
 same reset horizon used during training.</p></li>
 <li><p>The Viser reward bar panel’s term cap is now configurable via
@@ -580,6 +586,8 @@ reward terms can show them all. Defaults to 20, preserving previous behavior.
 <section id="fixed">
 <h3>Fixed<a class="headerlink" href="#fixed" title="Link to this heading">#</a></h3>
 <ul class="simple">
+<li><p>Fixed the standalone ParaHand demo cube not colliding with the four fingertips
+when opening <code class="docutils literal notranslate"><span class="pre">hand_only.xml</span></code> directly in MuJoCo Simulate.</p></li>
 <li><p>Restored ONNX uploads and W&amp;B run metadata for velocity and manipulation
 training when using RSL-RL’s current <code class="docutils literal notranslate"><span class="pre">WandbLogWriter</span></code> logger name.</p></li>
 <li><p>The Viser reward bar panel no longer <em>silently</em> drops reward terms beyond
@@ -1596,7 +1604,7 @@ By The mjlab Developers
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Jul 24, 2026.
+  Last updated on Jul 25, 2026.
   <br/>
 </p>
   </div>

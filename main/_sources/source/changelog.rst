@@ -26,23 +26,29 @@ Added
 Changed
 ^^^^^^^
 
+- ParaHand relative joint and tendon actions now compute one control target per
+  policy step and hold it across all simulation substeps, instead of recomputing
+  the target relative to the latest state at every simulation substep.
 - The ParaHand grasp task now uses three lessons. It starts with a single nominal
-  cube at a fixed position and yaw, a fixed target, and a shared fixed set of 64
-  surface points. The second lesson enables position, yaw, target, shape, size, and
-  per-episode point sampling randomization. It uses uniformly distributed box,
-  sphere, and capsule variants with sizes from 0.75 to 1.5 times nominal. The final
-  lesson additionally enables per-observation point-cloud resampling. Each promotion
-  requires an independent rolling final-pose success rate of 85%, using the Isaac
-  Dexsuite Lift criterion of less than 5 cm position error.
+  cube at a randomized position with a fixed yaw and target. Every lesson resets
+  controllable robot joints with noise around the XML home keyframe. Each environment
+  independently samples 64 surface points at reset and keeps those points for the
+  episode while updating their coordinates with the moving object. The second lesson
+  enables yaw, target, shape, and size randomization. It uses uniformly distributed
+  box, sphere, and capsule variants with sizes from 0.75 to 1.5 times nominal. The
+  final lesson additionally enables per-observation point-cloud resampling. Actor
+  and critic observations now include the object's base-frame orientation quaternion.
+  Each promotion requires an independent rolling final-pose success rate of 85%,
+  using the Isaac Dexsuite Lift criterion of less than 5 cm position error.
 - The standalone ParaHand PPO configuration now uses a fixed 0.0003 learning rate
-  and a Beta action distribution bounded to -1--1. This prevents the policy mean
-  from drifting outside the environment's action range. Its palm translation axes
-  now make the x and y actuator names correspond to world x and y motion.
+  and the same scalar-standard-deviation Gaussian action distribution as the
+  FR3-mounted task. Its palm translation axes now make the x and y actuator names
+  correspond to world x and y motion.
 - The ParaHand grasp tasks now enable the simulation NaN guard by default so
   divergent physics states are captured for diagnosis.
 - The standalone ParaHand reset now preserves the XML ``home`` keyframe, including
   the palm height and tendon targets, and places the task object at the XML demo
-  cube position. Joint reset randomization starts in the second curriculum lesson.
+  cube position before applying reset randomization.
 - The play command accepts ``--episode-length-s`` to evaluate policies with the
   same reset horizon used during training.
 - The Viser reward bar panel's term cap is now configurable via
@@ -53,6 +59,8 @@ Changed
 Fixed
 ^^^^^
 
+- Fixed the standalone ParaHand demo cube not colliding with the four fingertips
+  when opening ``hand_only.xml`` directly in MuJoCo Simulate.
 - Restored ONNX uploads and W&B run metadata for velocity and manipulation
   training when using RSL-RL's current ``WandbLogWriter`` logger name.
 - The Viser reward bar panel no longer *silently* drops reward terms beyond
