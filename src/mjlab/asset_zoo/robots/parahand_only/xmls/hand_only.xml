@@ -57,15 +57,15 @@
             <site rgba="1 0 0 0.3" zaxis="1 0 0" size="0.006" pos="0.029 0.006 0"/>
         </default>
         <default class="palm_translation">
-            <joint solreflimit=".001 1" solimplimit="0.97 0.99 0.00001 0.1 2" damping="1"/>
-            <position ctrllimited="true" inheritrange="1" kp="2000" kv="200"/>
+            <joint type="slide" solreflimit=".001 1" solimplimit="0.97 0.99 0.00001 0.1 2" damping="1"/>
+            <position ctrllimited="true" inheritrange="1" kp="300" kv="40" forcerange="-200 200"/>
         </default>
         <default class="palm_rotation">
-            <joint solreflimit=".001 1" solimplimit="0.97 0.99 0.00001 0.1 2" damping="1" limited="true" range="-3.14 3.14"/>
-            <position ctrllimited="true" inheritrange="1" kp="2000" kv="200"/>
+            <joint type="hinge" solreflimit=".001 1" solimplimit="0.97 0.99 0.00001 0.1 2" damping="1" limited="true" range="-1 1"/>
+            <position ctrllimited="true" inheritrange="1" kp="60" kv="8" forcerange="-80 80"/>
         </default>
         <default class="cube">
-            <geom friction="2.0 0.1 0.002" contype="2" conaffinity="1" condim="4" />
+            <geom friction="2.0 0.1 0.002" contype="2097152" conaffinity="2097151" condim="4" />
         </default>
     </default>
     <asset>
@@ -73,27 +73,27 @@
         <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0"/>
     </asset>
     <keyframe>
-        <key name="home" 
-            qpos="0 0 0.5 0 0 0
-                0 0 0 0
-                0 0 0 0
-                0 0 0 0
-                0 0 0 0
-                0 0 0 0
-                0.3 0.1 0.03 1 0 0 0" 
+		<key name="home"
+			qpos="0 0 0.35 0 0 0
+				0 0 0.23 0.63
+				0 0.74 0.48 0.32
+				0 0.74 0.48 0.32
+				0 0.74 0.48 0.32
+				0 0.74 0.48 0.32
+				0 0 0.03 1 0 0 0"
             qvel="0 0 0 0 0 0
                 0 0 0 0 
                 0 0 0 0
                 0 0 0 0
                 0 0 0 0
                 0 0 0 0
-                0 0 0 0 0 0" 
-            ctrl="0 0 0.5 0 0 0
-                0 0 0 0 
-                0 0 0.0285
-                0 0 0.0285
-                0 0 0.0285
-                0 0 0.0285" />
+                0 0 0 0 0 0"
+			ctrl="0 0 0.35 0 0 0
+				0 0 0.23 0.63
+				0 0.74 0.021
+				0 0.74 0.021
+				0 0.74 0.021
+				0 0.74 0.021" />
     </keyframe>
     <worldbody>
         <geom name="floor" pos="0 0 0" size="0 0 0.01" type="plane" material="groundplane" contype="1" conaffinity="2" friction="1 0.05 0.05" solref="0.001 1" solimp="0.98 0.99 0.001"/>
@@ -101,12 +101,12 @@
             <site name="wrist_origin" size="0.002" rgba="1 0 0 1"/>
             <site name="inner_palm_5" pos="-0.00249 -0.021 0.1" size="0.002" rgba="0 0 1 1"/>
             <geom name="palm_collision_1" type="box" pos="-0.00249 0.00075 0.1" size="0.045 0.02175 0.04" class="palm_collision" contype="262144" conaffinity="2097343"/>
-            <joint name="palm_translation_x" type="slide" axis="0 0 1" class="palm_translation" range="-0.5 0.5"/>
-            <joint name="palm_translation_y" type="slide" axis="1 0 0" class="palm_translation" range="-0.5 0.5"/>
-            <joint name="palm_translation_z" type="slide" axis="0 1 0" class="palm_translation" range="-0.5 1"/>
-            <joint name="palm_rotation_x" type="hinge" axis="1 0 0" class="palm_rotation"/>
-            <joint name="palm_rotation_y" type="hinge" axis="0 1 0" class="palm_rotation"/>
-            <joint name="palm_rotation_z" type="hinge" axis="0 0 1" class="palm_rotation"/>
+            <joint name="palm_translation_x" axis="0 0 1" class="palm_translation" range="-0.5 0.5"/>
+            <joint name="palm_translation_y" axis="1 0 0" class="palm_translation" range="-0.5 0.5"/>
+            <joint name="palm_translation_z" axis="0 1 0" class="palm_translation" range="-0.5 1"/>
+            <joint name="palm_rotation_x" axis="1 0 0" class="palm_rotation"/>
+            <joint name="palm_rotation_y" axis="0 1 0" class="palm_rotation"/>
+            <joint name="palm_rotation_z" axis="0 0 1" class="palm_rotation"/>
             <body name="thumb_mc_1" pos="0.01905 0 0.05851" euler="3.14 1.57 0">
                 <joint name="thumb_cmc_1" type="hinge" axis="0 1 0" class="thumb_joint" range="0 0.785"/>
                 <geom type="box" pos="0 0 0.01" size="0.001 0.001 0.002" class="visual"/>

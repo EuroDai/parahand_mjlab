@@ -19,6 +19,7 @@ from mjlab.asset_zoo.robots.parahand_only.parahand_only_constants import (
   PALM_ROTATION_ACTUATOR_NAMES,
   PALM_TRANSLATION_ACTUATOR_NAMES,
   PARAHAND_ONLY_ACTION_SCALE,
+  PARAHAND_ONLY_XML,
   TENDON_ACTUATOR_NAMES,
   get_parahand_only_robot_cfg,
 )
@@ -49,12 +50,12 @@ from mjlab.tasks.parahand_grasp.mdp.consts import (
 from mjlab.tasks.parahand_grasp.mdp.curriculums import object_lesson_curriculum
 from mjlab.tasks.parahand_grasp.mdp.events import (
   _VARIANT_MODEL_FIELDS,
-  reset_joints_by_curriculum,
   reset_variant_object_pose,
 )
 from mjlab.tasks.parahand_grasp.mdp.observations import (
   _sample_model_surface_points,
   object_point_cloud_b,
+  object_quaternion_b,
 )
 
 
@@ -100,6 +101,17 @@ def test_object_curriculum_starts_with_box_then_uses_scaled_variants():
   point_cloud_cfg = cfg.observations["actor"].terms["object_point_cloud_b"]
   assert point_cloud_cfg.params["curriculum_event_name"] == "reset_object_pose"
   assert point_cloud_cfg.params["dynamic_sampling_stage"] == 2
+  actor_term_names = tuple(cfg.observations["actor"].terms)
+  assert actor_term_names.index("object_quaternion_b") > actor_term_names.index(
+    "object_point_cloud_b"
+  )
+  assert cfg.observations["actor"].terms["object_quaternion_b"].params == {
+    "object_name": "object"
+  }
+  assert "object_quaternion_b" in cfg.observations["critic"].terms
+  reset_joints_cfg = cfg.events["reset_robot_joints"]
+  assert reset_joints_cfg.func.__name__ == "reset_joints_by_offset"
+  assert reset_joints_cfg.params["position_range"] == (-0.05, 0.05)
   assert curriculum_cfg.params["promotion_threshold"] == 0.85
   assert curriculum_cfg.params["success_threshold"] == 0.05
   assert curriculum_cfg.params["success_window_size"] == 4096
@@ -221,7 +233,7 @@ def test_object_reset_switches_between_box_lesson_and_assigned_variants():
     torch.testing.assert_close(getattr(model, field), assigned)
 
 
-def test_object_pose_randomization_starts_in_second_lesson():
+def test_object_position_randomizes_in_first_lesson_and_yaw_in_second():
   num_envs = 2
   event = cast(Any, object.__new__(reset_variant_object_pose))
   event._apply_curriculum_stage = Mock()
@@ -243,9 +255,12 @@ def test_object_pose_randomization_starts_in_second_lesson():
     "yaw_range": (0.5, 0.5),
   }
 
+  torch.manual_seed(0)
   event(env, env_ids, curriculum_stage=0, **params)
   first_lesson_pose = event.object.write_root_link_pose_to_sim.call_args.args[0]
-  torch.testing.assert_close(first_lesson_pose[:, :2], torch.zeros(num_envs, 2))
+  assert torch.all(first_lesson_pose[:, 0].abs() <= 0.05)
+  assert torch.all(first_lesson_pose[:, 1].abs() <= 0.1)
+  assert torch.any(first_lesson_pose[:, :2] != 0.0)
   torch.testing.assert_close(
     first_lesson_pose[:, 3:],
     torch.tensor([[1.0, 0.0, 0.0, 0.0]]).expand(num_envs, -1),
@@ -261,41 +276,26 @@ def test_object_pose_randomization_starts_in_second_lesson():
   assert torch.all(second_lesson_pose[:, 6] > 0.0)
 
 
-def test_joint_reset_randomization_starts_in_second_lesson(monkeypatch):
-  curriculum_event_cfg = SimpleNamespace(params={"curriculum_stage": 0})
+def test_object_quaternion_is_expressed_in_robot_base_frame():
+  half_sqrt_two = 2.0**-0.5
   env = SimpleNamespace(
-    event_manager=SimpleNamespace(
-      get_term_cfg=lambda _name: curriculum_event_cfg,
-    )
+    scene={
+      "robot": SimpleNamespace(
+        data=SimpleNamespace(
+          root_link_quat_w=torch.tensor([[half_sqrt_two, 0.0, 0.0, half_sqrt_two]])
+        )
+      ),
+      "object": SimpleNamespace(
+        data=SimpleNamespace(root_link_quat_w=torch.tensor([[1.0, 0.0, 0.0, 0.0]]))
+      ),
+    },
   )
-  reset_joints_by_offset = Mock()
-  monkeypatch.setattr(
-    "mjlab.tasks.parahand_grasp.mdp.events.reset_joints_by_offset",
-    reset_joints_by_offset,
-  )
-  env_ids = torch.tensor([0, 1])
-  asset_cfg = SimpleNamespace(name="robot")
 
-  reset_joints_by_curriculum(
-    cast(Any, env),
-    env_ids,
-    position_range=(-0.05, 0.05),
-    velocity_range=(0.0, 0.0),
-    curriculum_event_name="reset_object_pose",
-    asset_cfg=cast(Any, asset_cfg),
+  value = object_quaternion_b(cast(Any, env), object_name="object")
+  torch.testing.assert_close(
+    value,
+    torch.tensor([[half_sqrt_two, 0.0, 0.0, -half_sqrt_two]]),
   )
-  assert reset_joints_by_offset.call_args.kwargs["position_range"] == (0.0, 0.0)
-
-  curriculum_event_cfg.params["curriculum_stage"] = 1
-  reset_joints_by_curriculum(
-    cast(Any, env),
-    env_ids,
-    position_range=(-0.05, 0.05),
-    velocity_range=(0.0, 0.0),
-    curriculum_event_name="reset_object_pose",
-    asset_cfg=cast(Any, asset_cfg),
-  )
-  assert reset_joints_by_offset.call_args.kwargs["position_range"] == (-0.05, 0.05)
 
 
 def test_point_cloud_sampling_is_fixed_until_final_curriculum_stage():
@@ -317,16 +317,22 @@ def test_point_cloud_sampling_is_fixed_until_final_curriculum_stage():
 
   identity_quat = torch.tensor([[1.0, 0.0, 0.0, 0.0]])
   zero_pos = torch.zeros(1, 3)
-  entity = SimpleNamespace(
+  object_entity = SimpleNamespace(
     data=SimpleNamespace(
-      root_link_pos_w=zero_pos,
+      root_link_pos_w=zero_pos.clone(),
+      root_link_quat_w=identity_quat,
+    )
+  )
+  robot_entity = SimpleNamespace(
+    data=SimpleNamespace(
+      root_link_pos_w=zero_pos.clone(),
       root_link_quat_w=identity_quat,
     )
   )
   env = SimpleNamespace(
     num_envs=1,
     device="cpu",
-    scene={"object": entity, "robot": entity},
+    scene={"object": object_entity, "robot": robot_entity},
   )
   params = {
     "object_name": "object",
@@ -342,6 +348,14 @@ def test_point_cloud_sampling_is_fixed_until_final_curriculum_stage():
   torch.testing.assert_close(first, second)
   assert term._draw_sample_ids.call_count == 0
 
+  object_entity.data.root_link_pos_w[:, 0] = 0.5
+  moved = term(env, **params)
+  torch.testing.assert_close(
+    moved - first,
+    torch.tensor([[[0.5, 0.0, 0.0], [0.5, 0.0, 0.0]]]),
+  )
+  assert term._draw_sample_ids.call_count == 0
+
   term._curriculum_event_cfg.params["curriculum_stage"] = 2
   third = term(env, **params)
   fourth = term(env, **params)
@@ -350,26 +364,37 @@ def test_point_cloud_sampling_is_fixed_until_final_curriculum_stage():
   assert not torch.equal(third, fourth)
 
 
-def test_point_cloud_cache_randomization_starts_in_second_lesson():
+def test_point_cloud_cache_randomizes_per_env_on_reset_before_final_lesson():
   term = cast(Any, object.__new__(object_point_cloud_b))
+  term._dynamic_sampling_stage = 2
   term._curriculum_event_cfg = SimpleNamespace(params={"curriculum_stage": 0})
-  term._fixed_sample_ids = torch.tensor([[0, 1], [0, 1]])
-  term._cached_sample_ids = torch.tensor([[0, 1], [3, 2]])
-  term._draw_sample_ids = Mock(return_value=torch.tensor([[2, 3]]))
+  term._cached_sample_ids = torch.tensor([[0, 1], [0, 1]])
+  term._draw_sample_ids = Mock(
+    side_effect=(
+      torch.tensor([[2, 3], [1, 2]]),
+      torch.tensor([[3, 0]]),
+    )
+  )
 
-  term.reset(torch.tensor([1]))
-  assert term._cached_sample_ids.tolist() == [[0, 1], [0, 1]]
-  term._draw_sample_ids.assert_not_called()
+  term.reset(torch.tensor([0, 1]))
+  assert term._cached_sample_ids.tolist() == [[2, 3], [1, 2]]
+  assert term._draw_sample_ids.call_args.args[0] == 2
 
   term._curriculum_event_cfg.params["curriculum_stage"] = 1
   term.reset(torch.tensor([1]))
-  assert term._cached_sample_ids.tolist() == [[0, 1], [2, 3]]
-  term._draw_sample_ids.assert_called_once()
+  assert term._cached_sample_ids.tolist() == [[2, 3], [3, 0]]
+  assert term._draw_sample_ids.call_count == 2
+
+  term._curriculum_event_cfg.params["curriculum_stage"] = 2
+  term.reset(torch.tensor([0]))
+  assert term._cached_sample_ids.tolist() == [[2, 3], [3, 0]]
+  assert term._draw_sample_ids.call_count == 2
 
 
 def test_parahand_only_asset_removes_demo_scene_and_builds_articulation():
   spec = get_parahand_only_spec()
   model = spec.compile()
+  standalone_model = mujoco.MjModel.from_xml_path(str(PARAHAND_ONLY_XML))
 
   assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "cube") == -1
   assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "floor") == -1
@@ -381,12 +406,25 @@ def test_parahand_only_asset_removes_demo_scene_and_builds_articulation():
   palm_translation_z_id = mujoco.mj_name2id(
     model, mujoco.mjtObj.mjOBJ_JOINT, "palm_translation_z"
   )
+  standalone_palm_translation_z_id = mujoco.mj_name2id(
+    standalone_model, mujoco.mjtObj.mjOBJ_JOINT, "palm_translation_z"
+  )
   palm_translation_z_qpos_adr = model.jnt_qposadr[palm_translation_z_id]
-  assert model.key_qpos[0, palm_translation_z_qpos_adr] == pytest.approx(0.5)
+  standalone_palm_translation_z_qpos_adr = standalone_model.jnt_qposadr[
+    standalone_palm_translation_z_id
+  ]
+  assert model.key_qpos[0, palm_translation_z_qpos_adr] == pytest.approx(
+    standalone_model.key_qpos[0, standalone_palm_translation_z_qpos_adr]
+  )
   palm_translation_z_actuator_id = mujoco.mj_name2id(
     model, mujoco.mjtObj.mjOBJ_ACTUATOR, "palm_translation_z"
   )
-  assert model.key_ctrl[0, palm_translation_z_actuator_id] == pytest.approx(0.5)
+  standalone_palm_translation_z_actuator_id = mujoco.mj_name2id(
+    standalone_model, mujoco.mjtObj.mjOBJ_ACTUATOR, "palm_translation_z"
+  )
+  assert model.key_ctrl[0, palm_translation_z_actuator_id] == pytest.approx(
+    standalone_model.key_ctrl[0, standalone_palm_translation_z_actuator_id]
+  )
   for tendon_name in TENDON_ACTUATOR_NAMES:
     tendon_actuator_id = mujoco.mj_name2id(
       model, mujoco.mjtObj.mjOBJ_ACTUATOR, tendon_name
@@ -398,6 +436,42 @@ def test_parahand_only_asset_removes_demo_scene_and_builds_articulation():
   assert robot.root_body.mocap
   assert len(robot.joint_names) == 26
   assert len(robot.actuator_names) == 22
+
+
+def test_parahand_only_standalone_cube_collides_with_fingertips_and_floor():
+  model = mujoco.MjModel.from_xml_path(str(PARAHAND_ONLY_XML))
+  cube_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "cube")
+
+  for finger_name in ("index", "middle", "ring", "little"):
+    for geom_suffix in ("tip", "tac"):
+      geom_id = mujoco.mj_name2id(
+        model,
+        mujoco.mjtObj.mjOBJ_GEOM,
+        f"{finger_name}_{geom_suffix}",
+      )
+      assert _geoms_can_collide(model, geom_id, cube_id)
+
+  floor_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "floor")
+  assert _geoms_can_collide(model, cube_id, floor_id)
+
+  data = mujoco.MjData(model)
+  mujoco.mj_resetDataKeyframe(model, data, 0)
+  mujoco.mj_forward(model, data)
+  index_tip_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "index_tip")
+  cube_joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "cube_freejoint")
+  cube_qpos_adr = model.jnt_qposadr[cube_joint_id]
+  data.qpos[cube_qpos_adr : cube_qpos_adr + 3] = data.geom_xpos[index_tip_id]
+  data.qpos[cube_qpos_adr + 3 : cube_qpos_adr + 7] = (1.0, 0.0, 0.0, 0.0)
+  mujoco.mj_forward(model, data)
+  contact_pairs = {(contact.geom[0], contact.geom[1]) for contact in data.contact}
+  assert any(cube_id in pair and index_tip_id in pair for pair in contact_pairs)
+
+
+def _geoms_can_collide(model: mujoco.MjModel, geom_a: int, geom_b: int) -> bool:
+  return bool(
+    (model.geom_contype[geom_a] & model.geom_conaffinity[geom_b])
+    or (model.geom_contype[geom_b] & model.geom_conaffinity[geom_a])
+  )
 
 
 def test_parahand_only_hand_names_match_parahand_fr3():
@@ -469,12 +543,9 @@ def test_parahand_only_task_uses_xml_home_and_requested_action_scales():
   )
 
   reset_joints_cfg = cfg.events["reset_robot_joints"].params["asset_cfg"]
-  assert reset_joints_cfg.joint_names == (
-    PALM_TRANSLATION_ACTUATOR_NAMES + PALM_ROTATION_ACTUATOR_NAMES
-  )
-  assert cfg.events["reset_robot_joints"].params["curriculum_event_name"] == (
-    "reset_object_pose"
-  )
+  assert reset_joints_cfg.joint_names == expected_joint_names
+  assert cfg.events["reset_robot_joints"].params["position_range"] == (-0.05, 0.05)
+  assert "curriculum_event_name" not in cfg.events["reset_robot_joints"].params
   assert cfg.events["reset_object_pose"].params["position_center"] == (0.3, 0.1)
   command_cfg = cfg.commands["object_pose"]
   assert isinstance(command_cfg, LiftingCommandCfg)
@@ -493,8 +564,9 @@ def test_parahand_only_task_uses_xml_home_and_requested_action_scales():
   assert agent_cfg.algorithm.learning_rate == 3.0e-4
   assert agent_cfg.algorithm.schedule == "fixed"
   assert agent_cfg.actor.distribution_cfg == {
-    "class_name": "BetaDistribution",
-    "action_range": (-1.0, 1.0),
+    "class_name": "GaussianDistribution",
+    "init_std": 1.0,
+    "std_type": "scalar",
   }
 
   fingertip_quat_cfg = cfg.observations["actor"].terms["fingertip_quat_b"]
@@ -529,7 +601,7 @@ def test_training_config_matches_playground_horizon_and_ppo_settings():
   assert agent_cfg.max_iterations == 763
   assert agent_cfg.algorithm.num_learning_epochs == 2
   assert agent_cfg.algorithm.num_mini_batches == 32
-  assert agent_cfg.algorithm.learning_rate == 1.0e-3
+  assert agent_cfg.algorithm.learning_rate == 3.0e-4
   assert agent_cfg.algorithm.schedule == "adaptive"
   assert agent_cfg.algorithm.entropy_coef == 0.005
   assert agent_cfg.algorithm.value_loss_coef == 1.0

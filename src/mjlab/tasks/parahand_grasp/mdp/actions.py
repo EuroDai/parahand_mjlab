@@ -85,7 +85,13 @@ class ParaHandRelativeJointPositionActionCfg(_ClippedActionCfg):
 
 
 class ParaHandRelativeJointPositionAction(_ClippedAction):
-  """Joint targets relative to current angles with mcp_1 constraints."""
+  """Per-policy-step joint targets relative to current angles.
+
+  The relative target is computed once when the policy action is processed.
+  Every physics substep then tracks that same target.
+  """
+
+  _ctrl_target: torch.Tensor
 
   def __init__(
     self,
@@ -94,6 +100,7 @@ class ParaHandRelativeJointPositionAction(_ClippedAction):
   ):
     super().__init__(cfg, env)
     self._ctrl_range = self._actuator_ctrl_range()
+    self._ctrl_target = self._entity.data.joint_pos[:, self.target_ids].clone()
     target_index = {name: index for index, name in enumerate(self.target_names)}
     missing_names = set(cfg.coupled_finger_actuator_names) - target_index.keys()
     if missing_names:
@@ -108,12 +115,23 @@ class ParaHandRelativeJointPositionAction(_ClippedAction):
       self._little_mcp_1_id,
     ) = (target_index[name] for name in cfg.coupled_finger_actuator_names)
 
-  def apply_actions(self) -> None:
+  def process_actions(self, actions: torch.Tensor) -> None:
+    super().process_actions(actions)
     current_position = self._entity.data.joint_pos[:, self.target_ids]
     target = current_position + self._processed_actions
     target = target.clamp(self._ctrl_range[..., 0], self._ctrl_range[..., 1])
     self._apply_mcp_1_constraints(target)
-    self._entity.set_joint_position_target(target, joint_ids=self.target_ids)
+    self._ctrl_target.copy_(target)
+
+  def apply_actions(self) -> None:
+    self._entity.set_joint_position_target(self._ctrl_target, joint_ids=self.target_ids)
+
+  def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+    if env_ids is None:
+      env_ids = slice(None)
+    super().reset(env_ids)
+    current_position = self._entity.data.joint_pos[:, self.target_ids]
+    self._ctrl_target[env_ids] = current_position[env_ids]
 
   def _apply_mcp_1_constraints(self, target: torch.Tensor) -> None:
     middle_lower = torch.maximum(
@@ -153,7 +171,9 @@ class RelativeTendonLengthActionCfg(_ClippedActionCfg):
 
 
 class RelativeTendonLengthAction(_ClippedAction):
-  """Tendon targets relative to the currently measured tendon lengths."""
+  """Per-policy-step tendon targets relative to measured lengths."""
+
+  _ctrl_target: torch.Tensor
 
   def __init__(
     self,
@@ -162,9 +182,21 @@ class RelativeTendonLengthAction(_ClippedAction):
   ):
     super().__init__(cfg, env)
     self._ctrl_range = self._actuator_ctrl_range()
+    self._ctrl_target = self._entity.data.tendon_len[:, self.target_ids].clone()
 
-  def apply_actions(self) -> None:
+  def process_actions(self, actions: torch.Tensor) -> None:
+    super().process_actions(actions)
     current_length = self._entity.data.tendon_len[:, self.target_ids]
     target = current_length + self._processed_actions
     target = target.clamp(self._ctrl_range[..., 0], self._ctrl_range[..., 1])
-    self._entity.set_tendon_len_target(target, tendon_ids=self.target_ids)
+    self._ctrl_target.copy_(target)
+
+  def apply_actions(self) -> None:
+    self._entity.set_tendon_len_target(self._ctrl_target, tendon_ids=self.target_ids)
+
+  def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+    if env_ids is None:
+      env_ids = slice(None)
+    super().reset(env_ids)
+    current_length = self._entity.data.tendon_len[:, self.target_ids]
+    self._ctrl_target[env_ids] = current_length[env_ids]

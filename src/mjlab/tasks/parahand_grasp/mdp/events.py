@@ -6,7 +6,6 @@ import torch
 
 from mjlab.entity import Entity
 from mjlab.entity.variants import VARIANT_DEPENDENT_FIELDS
-from mjlab.envs.mdp.events import reset_joints_by_offset
 from mjlab.utils.lab_api.math import quat_from_euler_xyz
 
 from .consts import NOMINAL_BOX_OBJECT_NAME, PRIMITIVE_OBJECTS
@@ -20,28 +19,6 @@ _VARIANT_MODEL_FIELDS = (
 if TYPE_CHECKING:
   from mjlab.envs import ManagerBasedRlEnv
   from mjlab.managers.event_manager import EventTermCfg
-  from mjlab.managers.scene_entity_config import SceneEntityCfg
-
-
-def reset_joints_by_curriculum(
-  env: ManagerBasedRlEnv,
-  env_ids: torch.Tensor | None,
-  position_range: tuple[float, float],
-  velocity_range: tuple[float, float],
-  curriculum_event_name: str,
-  asset_cfg: SceneEntityCfg,
-) -> None:
-  """Reset selected joints around their home keyframe as lessons advance."""
-  curriculum_event_cfg = env.event_manager.get_term_cfg(curriculum_event_name)
-  curriculum_stage = int(curriculum_event_cfg.params["curriculum_stage"])
-  active_position_range = (0.0, 0.0) if curriculum_stage == 0 else position_range
-  reset_joints_by_offset(
-    env,
-    env_ids,
-    position_range=active_position_range,
-    velocity_range=velocity_range,
-    asset_cfg=asset_cfg,
-  )
 
 
 class reset_variant_object_pose:
@@ -108,11 +85,7 @@ class reset_variant_object_pose:
     self._apply_curriculum_stage(env, env_ids, curriculum_stage)
     num_resets = len(env_ids)
     xy_center = torch.tensor(position_center, device=env.device)
-    xy_noise = (
-      torch.zeros_like(xy_center)
-      if curriculum_stage == 0
-      else torch.tensor(position_noise, device=env.device)
-    )
+    xy_noise = torch.tensor(position_noise, device=env.device)
     active_position = torch.zeros(num_resets, 3, device=env.device)
     active_position[:, :2] = (
       xy_center + (torch.rand(num_resets, 2, device=env.device) * 2.0 - 1.0) * xy_noise

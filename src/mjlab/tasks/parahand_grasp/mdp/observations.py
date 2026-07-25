@@ -73,6 +73,17 @@ def object_position_b(
   return quat_apply(quat_inv(robot.data.root_link_quat_w), object_pos_rel_w)
 
 
+def object_quaternion_b(
+  env: ManagerBasedRlEnv,
+  object_name: str,
+  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+  """Object orientation quaternion in the robot base frame."""
+  robot: Entity = env.scene[asset_cfg.name]
+  obj: Entity = env.scene[object_name]
+  return quat_mul(quat_inv(robot.data.root_link_quat_w), obj.data.root_link_quat_w)
+
+
 def target_position_b(
   env: ManagerBasedRlEnv,
   command_name: str,
@@ -175,10 +186,7 @@ class object_point_cloud_b:
           _sample_model_surface_points(source_model, self._pool_size, env.device)
         )
     self._points_local = torch.stack(point_pools)
-    self._fixed_sample_ids = torch.arange(
-      self._sample_size, device=env.device, dtype=torch.long
-    ).expand(env.num_envs, -1)
-    self._cached_sample_ids = self._fixed_sample_ids.clone()
+    self._cached_sample_ids = self._draw_sample_ids(env.num_envs, env.device)
 
   def __call__(
     self,
@@ -247,9 +255,7 @@ class object_point_cloud_b:
     if env_ids is None:
       env_ids = slice(None)
     curriculum_stage = int(self._curriculum_event_cfg.params["curriculum_stage"])
-    if curriculum_stage == 0:
-      self._cached_sample_ids[env_ids] = self._fixed_sample_ids[env_ids]
-    else:
+    if curriculum_stage < self._dynamic_sampling_stage:
       num_envs = self._cached_sample_ids[env_ids].shape[0]
       self._cached_sample_ids[env_ids] = self._draw_sample_ids(
         num_envs, self._cached_sample_ids.device

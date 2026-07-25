@@ -155,16 +155,9 @@ def parahand_only_grasp_object_env_cfg(
   tendon_action.scale = PARAHAND_ONLY_ACTION_SCALE["index_tendon"]
 
   reset_joints_cfg = cfg.events["reset_robot_joints"].params["asset_cfg"]
-  reset_joints_cfg.joint_names = (
-    "palm_translation_x",
-    "palm_translation_y",
-    "palm_translation_z",
-    "palm_rotation_x",
-    "palm_rotation_y",
-    "palm_rotation_z",
-  )
+  reset_joints_cfg.joint_names = joint_actuator_names
   reset_joints_cfg.preserve_order = True
-  cfg.events["reset_object_pose"].params["position_center"] = (0.3, 0.1)
+  cfg.events["reset_object_pose"].params["position_center"] = (0, 0)
 
   command_cfg = cfg.commands["object_pose"]
   assert isinstance(command_cfg, LiftingCommandCfg)

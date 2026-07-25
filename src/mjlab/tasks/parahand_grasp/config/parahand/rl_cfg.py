@@ -39,7 +39,7 @@ def parahand_grasp_object_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       entropy_coef=0.005,
       num_learning_epochs=2,
       num_mini_batches=32,
-      learning_rate=1.0e-3,
+      learning_rate=3.0e-4,
       schedule="adaptive",
       gamma=0.99,
       lam=0.95,
@@ -61,10 +61,6 @@ def parahand_grasp_object_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
 def parahand_only_grasp_object_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   cfg = parahand_grasp_object_ppo_runner_cfg()
   cfg.experiment_name = "parahand_only_grasp_object"
-  cfg.actor.distribution_cfg = {
-    "class_name": "BetaDistribution",
-    "action_range": (-1.0, 1.0),
-  }
   cfg.algorithm.learning_rate = 3.0e-4
   cfg.algorithm.schedule = "fixed"
   return cfg

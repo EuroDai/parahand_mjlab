@@ -83,6 +83,12 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
       noise=Unoise(n_min=-0.003, n_max=0.003),
       clip=(-2.0, 2.0),
     ),
+    "object_quaternion_b": ObservationTermCfg(
+      func=parahand_mdp.object_quaternion_b,
+      params={"object_name": "object"},
+      noise=Unoise(n_min=-0.002, n_max=0.002),
+      clip=(-1.0, 1.0),
+    ),
     "joint_pos": ObservationTermCfg(
       func=parahand_mdp.joint_position,
       params={
@@ -219,15 +225,14 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
       },
     ),
     "reset_robot_joints": EventTermCfg(
-      func=parahand_mdp.reset_joints_by_curriculum,
+      func=mdp.reset_joints_by_offset,
       mode="reset",
       params={
         "position_range": (-0.05, 0.05),
         "velocity_range": (0.0, 0.0),
-        "curriculum_event_name": "reset_object_pose",
         "asset_cfg": SceneEntityCfg(
           "robot",
-          joint_names=_ARM_ACTUATOR_NAMES,
+          joint_names=_ARM_ACTUATOR_NAMES + _HAND_ACTUATOR_NAMES,
           preserve_order=True,
         ),
       },
@@ -237,8 +242,8 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
       mode="reset",
       params={
         "object_name": "object",
-        "position_center": (-0.55, 0.0),
-        "position_noise": (0.05, 0.1),
+        "position_center": (0.0, 0.0),
+        "position_noise": (0.1, 0.1),
         "yaw_range": (-0.5 * math.pi, 0.5 * math.pi),
         "curriculum_stage": 0,
       },
@@ -327,9 +332,9 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
       func=parahand_mdp.object_out_of_bounds,
       params={
         "object_name": "object",
-        "x_bounds": (-0.2, 0.2),
-        "y_bounds": (-0.2, 0.2),
-        "z_bounds": (-0.1, 2.0),
+        "x_bounds": (-0.4, 0.4),
+        "y_bounds": (-0.4, 0.4),
+        "z_bounds": (-0.05, 2.0),
       },
     ),
     "abnormal_robot": TerminationTermCfg(
