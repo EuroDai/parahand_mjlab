@@ -22,10 +22,21 @@ Added
   ``wrist_origin`` site remains distinct.
 - Added play-only visualization of the ParaHand actor's sampled object point cloud
   using debug spheres. Training configurations do not register the visualizer.
+- Added per-fingertip metrics for the ParaHand grasp tasks that log the final
+  object-contact force magnitude of each episode.
 
 Changed
 ^^^^^^^
 
+- ParaHand grasp policies now use a state-dependent tanh-squashed Gaussian action
+  distribution. The actor predicts a location and scale for every action in every
+  state. Samples and deterministic outputs are smoothly bounded to ``(-1, 1)``,
+  and PPO log-probabilities include the tanh change-of-variables correction.
+- ParaHand grasp contact rewards now use a smooth thumb-plus-one-finger force
+  score around the 0.5 threshold instead of a hard Boolean gate. The smooth score
+  gates contact and position-tracking rewards; success remains position-only.
+- ParaHand grasp rewards now include reset-relative vertical lift progress, normalized
+  by the current target height and gated by the smooth contact score.
 - ParaHand relative joint and tendon actions now compute one control target per
   policy step and hold it across all simulation substeps, instead of recomputing
   the target relative to the latest state at every simulation substep.
