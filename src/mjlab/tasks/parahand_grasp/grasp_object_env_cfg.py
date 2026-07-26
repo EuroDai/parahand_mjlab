@@ -5,6 +5,7 @@ from mjlab.managers.action_manager import ActionTermCfg
 from mjlab.managers.command_manager import CommandTermCfg
 from mjlab.managers.curriculum_manager import CurriculumTermCfg
 from mjlab.managers.event_manager import EventTermCfg
+from mjlab.managers.metrics_manager import MetricsTermCfg
 from mjlab.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
@@ -27,6 +28,13 @@ _FINGERTIP_SITE_NAMES = (
   "middle_tip",
   "ring_tip",
   "little_tip",
+)
+_FINGERTIP_CONTACT_GEOM_NAMES = (
+  "thumb_tac",
+  "index_tac",
+  "middle_tac",
+  "ring_tac",
+  "little_tac",
 )
 _ARM_ACTUATOR_NAMES = ("j1", "j2", "j3", "j4", "j5", "j6")
 _HAND_ACTUATOR_NAMES = (
@@ -53,6 +61,8 @@ _ACTION_TERM_NAMES = ("joint_pos", "tendon_length")
 _ARM_ACTION_SCALE = 0.01
 _HAND_ACTION_SCALE = 0.03
 _TENDON_ACTION_SCALE = 0.005
+_CONTACT_THRESHOLD = 0.5
+_CONTACT_TEMPERATURE = 0.1
 
 
 def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
@@ -254,19 +264,25 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
     name=_FINGERTIP_CONTACT_SENSOR_NAME,
     primary=ContactMatch(
       mode="geom",
-      pattern=(
-        "thumb_tac",
-        "index_tac",
-        "middle_tac",
-        "ring_tac",
-        "little_tac",
-      ),
+      pattern=_FINGERTIP_CONTACT_GEOM_NAMES,
       entity="robot",
     ),
     secondary=ContactMatch(mode="body", pattern="object", entity="object"),
     fields=("force",),
     reduce="netforce",
   )
+
+  metrics = {
+    f"{geom_name.removesuffix('_tac')}_contact_force_last": MetricsTermCfg(
+      func=parahand_mdp.contact_force_magnitude,
+      params={
+        "sensor_name": _FINGERTIP_CONTACT_SENSOR_NAME,
+        "fingertip_name": geom_name,
+      },
+      reduce="last",
+    )
+    for geom_name in _FINGERTIP_CONTACT_GEOM_NAMES
+  }
 
   rewards = {
     "action_l2": RewardTermCfg(
@@ -292,6 +308,17 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
         ),
       },
     ),
+    "object_lift": RewardTermCfg(
+      func=parahand_mdp.object_lift,
+      weight=2.0,
+      params={
+        "command_name": "object_pose",
+        "object_cfg": SceneEntityCfg("object"),
+        "sensor_name": _FINGERTIP_CONTACT_SENSOR_NAME,
+        "contact_threshold": _CONTACT_THRESHOLD,
+        "contact_temperature": _CONTACT_TEMPERATURE,
+      },
+    ),
     "position_tracking": RewardTermCfg(
       func=parahand_mdp.position_tracking,
       weight=2.0,
@@ -299,8 +326,9 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
         "command_name": "object_pose",
         "object_cfg": SceneEntityCfg("object"),
         "sensor_name": _FINGERTIP_CONTACT_SENSOR_NAME,
-        "std": 0.4,
-        "contact_threshold": 0.5,
+        "std": 0.25,
+        "contact_threshold": _CONTACT_THRESHOLD,
+        "contact_temperature": _CONTACT_TEMPERATURE,
       },
     ),
     "good_finger_contact": RewardTermCfg(
@@ -308,7 +336,8 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
       weight=0.5,
       params={
         "sensor_name": _FINGERTIP_CONTACT_SENSOR_NAME,
-        "threshold": 0.5,
+        "threshold": _CONTACT_THRESHOLD,
+        "temperature": _CONTACT_TEMPERATURE,
       },
     ),
     "success": RewardTermCfg(
@@ -372,6 +401,7 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
     rewards=rewards,
     terminations=terminations,
     curriculum=curriculum,
+    metrics=metrics,
     viewer=ViewerConfig(
       origin_type=ViewerConfig.OriginType.ASSET_BODY,
       entity_name="robot",

@@ -4,7 +4,9 @@ from tensordict import TensorDict
 from mjlab.rl.pointnet import PointNetModel
 
 
-def _make_model() -> PointNetModel:
+def _make_model(
+  distribution_cfg: dict[str, object] | None = None,
+) -> PointNetModel:
   obs = TensorDict(
     {"actor": torch.randn(4, 5, 297)},
     batch_size=[4],
@@ -16,6 +18,7 @@ def _make_model() -> PointNetModel:
     output_dim=22,
     hidden_dims=(512, 256, 256, 128),
     activation="swish",
+    distribution_cfg=distribution_cfg,
     pointnet_cfg={
       "point_cloud_offset": 6,
       "point_cloud_points": 64,
@@ -44,3 +47,24 @@ def test_pointnet_features_are_point_permutation_invariant():
   shuffled = TensorDict({"actor": shuffled_obs}, batch_size=[4])
 
   torch.testing.assert_close(model.get_latent(obs), model.get_latent(shuffled))
+
+
+def test_pointnet_supports_tanh_gaussian_distribution_and_export():
+  model = _make_model(
+    {
+      "class_name": ("mjlab.rl.distributions:StateDependentTanhGaussianDistribution"),
+      "init_std": 1.0,
+      "min_std": 0.001,
+    }
+  )
+  obs = TensorDict({"actor": torch.randn(4, 5, 297)}, batch_size=[4])
+
+  deterministic_actions = model(obs)
+  stochastic_actions = model(obs, stochastic_output=True)
+  exported_actions = model.as_jit()(obs["actor"])
+
+  assert model.mlp(model.get_latent(obs)).shape == (4, 2, 22)
+  assert torch.all(deterministic_actions.abs() < 1.0)
+  assert torch.all(stochastic_actions.abs() < 1.0)
+  torch.testing.assert_close(model.output_std, torch.ones_like(model.output_std))
+  torch.testing.assert_close(exported_actions, deterministic_actions)

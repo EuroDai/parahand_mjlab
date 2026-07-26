@@ -118,6 +118,24 @@ def test_object_curriculum_starts_with_box_then_uses_scaled_variants():
   assert curriculum_cfg.params["min_completed_episodes"] == 1024
 
 
+def test_grasp_rewards_use_aligned_smooth_contact_gate():
+  cfg = parahand_only_grasp_object_env_cfg()
+  object_lift = cfg.rewards["object_lift"]
+  position_tracking = cfg.rewards["position_tracking"]
+  good_finger_contact = cfg.rewards["good_finger_contact"]
+  success = cfg.rewards["success"]
+
+  assert object_lift.weight == 2.0
+  assert object_lift.params["contact_threshold"] == 0.5
+  assert object_lift.params["contact_temperature"] == 0.1
+  assert position_tracking.params["contact_threshold"] == 0.5
+  assert position_tracking.params["contact_temperature"] == 0.1
+  assert good_finger_contact.params["threshold"] == 0.5
+  assert good_finger_contact.params["temperature"] == 0.1
+  assert set(success.params) == {"command_name", "object_cfg", "pos_std"}
+  assert success.params["pos_std"] == 0.1
+
+
 def test_object_curriculum_promotes_at_isaac_final_success_threshold():
   num_envs = 20
   target_pos = torch.zeros(num_envs, 3)
@@ -564,9 +582,9 @@ def test_parahand_only_task_uses_xml_home_and_requested_action_scales():
   assert agent_cfg.algorithm.learning_rate == 3.0e-4
   assert agent_cfg.algorithm.schedule == "fixed"
   assert agent_cfg.actor.distribution_cfg == {
-    "class_name": "GaussianDistribution",
+    "class_name": ("mjlab.rl.distributions:StateDependentTanhGaussianDistribution"),
     "init_std": 1.0,
-    "std_type": "scalar",
+    "min_std": 0.001,
   }
 
   fingertip_quat_cfg = cfg.observations["actor"].terms["fingertip_quat_b"]
@@ -607,7 +625,7 @@ def test_training_config_matches_playground_horizon_and_ppo_settings():
   assert agent_cfg.algorithm.value_loss_coef == 1.0
   assert agent_cfg.algorithm.use_clipped_value_loss
   assert agent_cfg.actor.distribution_cfg == {
-    "class_name": "GaussianDistribution",
+    "class_name": ("mjlab.rl.distributions:StateDependentTanhGaussianDistribution"),
     "init_std": 1.0,
-    "std_type": "scalar",
+    "min_std": 0.001,
   }

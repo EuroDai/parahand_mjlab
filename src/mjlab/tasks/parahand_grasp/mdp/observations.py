@@ -103,12 +103,23 @@ def target_position_b(
 def contact_force_magnitude(
   env: ManagerBasedRlEnv,
   sensor_name: str,
+  fingertip_name: str | None = None,
 ) -> torch.Tensor:
-  """Magnitude of each primary's net contact force."""
+  """Return net contact-force magnitudes for all fingertips or one named fingertip."""
   sensor: ContactSensor = env.scene[sensor_name]
   force = sensor.data.force
   assert force is not None
-  return torch.linalg.vector_norm(force, dim=-1)
+  force_magnitude = torch.linalg.vector_norm(force, dim=-1)
+  if fingertip_name is None:
+    return force_magnitude
+  try:
+    fingertip_index = sensor.primary_names.index(fingertip_name)
+  except ValueError as exc:
+    raise ValueError(
+      f"Fingertip '{fingertip_name}' is not a primary of contact sensor "
+      f"'{sensor_name}'. Available primaries: {sensor.primary_names}."
+    ) from exc
+  return force_magnitude[:, fingertip_index]
 
 
 def tendon_length(

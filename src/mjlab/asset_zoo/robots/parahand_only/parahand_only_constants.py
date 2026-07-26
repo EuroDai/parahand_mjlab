@@ -103,8 +103,8 @@ def get_parahand_only_robot_cfg() -> EntityCfg:
 
 
 PARAHAND_ONLY_ACTION_SCALE = {
-  **dict.fromkeys(PALM_TRANSLATION_ACTUATOR_NAMES, 0.0005),
-  **dict.fromkeys(PALM_ROTATION_ACTUATOR_NAMES, 0.01),
+  **dict.fromkeys(PALM_TRANSLATION_ACTUATOR_NAMES, 0.01),
+  **dict.fromkeys(PALM_ROTATION_ACTUATOR_NAMES, 0.02),
   **dict.fromkeys(HAND_ACTUATOR_NAMES, 0.05),
-  **dict.fromkeys(TENDON_ACTUATOR_NAMES, 0.002),
+  **dict.fromkeys(TENDON_ACTUATOR_NAMES, 0.01),
 }

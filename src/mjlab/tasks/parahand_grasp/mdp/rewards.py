@@ -114,25 +114,45 @@ def fingers_to_object(
   robot: Entity = env.scene[fingertip_cfg.name]
   obj: Entity = env.scene[object_cfg.name]
   fingertip_pos_w = robot.data.site_pos_w[:, fingertip_cfg.site_ids]
-  distance = torch.linalg.vector_norm(
-    fingertip_pos_w - obj.data.root_link_pos_w[:, None, :], dim=-1
-  ).mean(dim=-1)
+  distance = (
+    torch.linalg.vector_norm(
+      fingertip_pos_w - obj.data.root_link_pos_w[:, None, :], dim=-1
+    )
+    .max(dim=-1)
+    .values
+  )
   return 1.0 - torch.tanh(distance / std)
 
 
-def contacts(
+def smooth_contact_score(
+  force_magnitude: torch.Tensor,
+  threshold: float,
+  temperature: float,
+) -> torch.Tensor:
+  """Return a smooth thumb-plus-one-finger contact score."""
+  if temperature <= 0.0:
+    raise ValueError(f"Contact temperature must be positive, got {temperature}.")
+  if force_magnitude.shape[-1] < 2:
+    raise ValueError("Smooth contact scoring requires at least two fingertips.")
+
+  finger_scores = torch.sigmoid((force_magnitude - threshold) / temperature)
+  thumb_score = finger_scores[:, 0]
+  other_score = finger_scores[:, 1:].amax(dim=-1)
+  return thumb_score * other_score
+
+
+def contact_score(
   env: ManagerBasedRlEnv,
   sensor_name: str,
   threshold: float,
+  temperature: float,
 ) -> torch.Tensor:
-  """Require thumb contact and contact from at least one other finger."""
+  """Score thumb-plus-one-finger object contact with a smooth force gate."""
   sensor: ContactSensor = env.scene[sensor_name]
   force = sensor.data.force
   assert force is not None
   force_magnitude = torch.linalg.vector_norm(force, dim=-1)
-  thumb_contact = force_magnitude[:, 0] > threshold
-  other_contact = (force_magnitude[:, 1:] > threshold).any(dim=-1)
-  return thumb_contact & other_contact
+  return smooth_contact_score(force_magnitude, threshold, temperature)
 
 
 def position_tracking(
@@ -142,24 +162,74 @@ def position_tracking(
   sensor_name: str,
   std: float,
   contact_threshold: float,
+  contact_temperature: float,
 ) -> torch.Tensor:
-  """Track the target position while maintaining the Isaac-style contact gate."""
+  """Track the target position while maintaining a smooth contact gate."""
   obj: Entity = env.scene[object_cfg.name]
   target_position = _target_position(env, command_name)
   distance = torch.linalg.vector_norm(
     obj.data.root_link_pos_w - target_position, dim=-1
   )
-  contact_gate = contacts(env, sensor_name, contact_threshold).float()
+  contact_gate = contact_score(
+    env,
+    sensor_name,
+    contact_threshold,
+    contact_temperature,
+  )
   return (1.0 - torch.tanh(distance / std)) * contact_gate
+
+
+class object_lift:
+  """Reward reset-relative vertical progress while maintaining contact."""
+
+  def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRlEnv):
+    object_cfg = cfg.params["object_cfg"]
+    if not isinstance(object_cfg, SceneEntityCfg):
+      raise TypeError("object_lift object_cfg must be a SceneEntityCfg.")
+    self._object: Entity = env.scene[object_cfg.name]
+    self._initial_height = torch.zeros(env.num_envs, device=env.device)
+
+  def reset(self, env_ids: torch.Tensor | slice | None) -> None:
+    if env_ids is None:
+      env_ids = slice(None)
+    self._initial_height[env_ids] = self._object_height()[env_ids]
+
+  def __call__(
+    self,
+    env: ManagerBasedRlEnv,
+    command_name: str,
+    object_cfg: SceneEntityCfg,
+    sensor_name: str,
+    contact_threshold: float,
+    contact_temperature: float,
+  ) -> torch.Tensor:
+    del object_cfg
+    object_height = self._object_height()
+    target_height = _target_position(env, command_name)[:, 2]
+    lift_height = (object_height - self._initial_height).clamp_min(0.0)
+    target_lift_height = (target_height - self._initial_height).clamp_min(1.0e-3)
+    lift_progress = (lift_height / target_lift_height).clamp(0.0, 1.0)
+    contact_gate = contact_score(
+      env,
+      sensor_name,
+      contact_threshold,
+      contact_temperature,
+    )
+    return lift_progress * contact_gate
+
+  def _object_height(self) -> torch.Tensor:
+    q_adr = self._object.data.indexing.free_joint_q_adr
+    return self._object.data.data.qpos[:, q_adr[2]]
 
 
 def good_finger_contact(
   env: ManagerBasedRlEnv,
   sensor_name: str,
   threshold: float,
+  temperature: float,
 ) -> torch.Tensor:
-  """Reward thumb-plus-one-finger object contact."""
-  return contacts(env, sensor_name, threshold).float()
+  """Reward smooth thumb-plus-one-finger object contact."""
+  return contact_score(env, sensor_name, threshold, temperature)
 
 
 def success(
@@ -168,7 +238,7 @@ def success(
   object_cfg: SceneEntityCfg,
   pos_std: float,
 ) -> torch.Tensor:
-  """Isaac-style position-only success shaping reward."""
+  """Position-only success shaping reward."""
   obj: Entity = env.scene[object_cfg.name]
   target_position = _target_position(env, command_name)
   distance = torch.linalg.vector_norm(
