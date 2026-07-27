@@ -28,10 +28,18 @@ Added
 Changed
 ^^^^^^^
 
-- ParaHand grasp policies now use a state-dependent tanh-squashed Gaussian action
-  distribution. The actor predicts a location and scale for every action in every
-  state. Samples and deterministic outputs are smoothly bounded to ``(-1, 1)``,
-  and PPO log-probabilities include the tanh change-of-variables correction.
+- The first ParaHand object curriculum lesson now uses the nominal capsule instead
+  of the nominal box.
+- ParaHand grasp policies now use a tanh-squashed Gaussian action distribution
+  with the original state-independent learnable standard deviation. Environment
+  actions and deterministic outputs are bounded to ``[-1, 1]``, and PPO
+  log-probabilities include the tanh change-of-variables correction. PPO stores
+  unsquashed Gaussian samples and only applies tanh to actions sent to the
+  environment, avoiding unstable inverse transforms for saturated actions. The
+  learning rate matches para_hand_mujoco at ``1e-4``. PPO updates clamp
+  log-probability ratios, skip non-finite losses and gradients, and prevent
+  adaptive scheduling from raising the learning rate above its configured initial
+  value.
 - ParaHand grasp contact rewards now use a smooth thumb-plus-one-finger force
   score around the 0.5 threshold instead of a hard Boolean gate. The smooth score
   gates contact and position-tracking rewards; success remains position-only.
