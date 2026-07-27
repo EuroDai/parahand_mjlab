@@ -1,6 +1,7 @@
 import torch
 from tensordict import TensorDict
 
+from mjlab.rl.distributions import TanhGaussianDistribution
 from mjlab.rl.pointnet import PointNetModel
 
 
@@ -52,19 +53,21 @@ def test_pointnet_features_are_point_permutation_invariant():
 def test_pointnet_supports_tanh_gaussian_distribution_and_export():
   model = _make_model(
     {
-      "class_name": ("mjlab.rl.distributions:StateDependentTanhGaussianDistribution"),
+      "class_name": "mjlab.rl.distributions:TanhGaussianDistribution",
       "init_std": 1.0,
-      "min_std": 0.001,
+      "std_type": "scalar",
     }
   )
   obs = TensorDict({"actor": torch.randn(4, 5, 297)}, batch_size=[4])
 
   deterministic_actions = model(obs)
-  stochastic_actions = model(obs, stochastic_output=True)
+  raw_stochastic_actions = model(obs, stochastic_output=True)
   exported_actions = model.as_jit()(obs["actor"])
 
-  assert model.mlp(model.get_latent(obs)).shape == (4, 2, 22)
+  assert isinstance(model.distribution, TanhGaussianDistribution)
+  stochastic_actions = model.distribution.postprocess(raw_stochastic_actions)
+  assert model.mlp(model.get_latent(obs)).shape == (4, 22)
   assert torch.all(deterministic_actions.abs() < 1.0)
-  assert torch.all(stochastic_actions.abs() < 1.0)
+  assert torch.all(stochastic_actions.abs() <= 1.0)
   torch.testing.assert_close(model.output_std, torch.ones_like(model.output_std))
   torch.testing.assert_close(exported_actions, deterministic_actions)

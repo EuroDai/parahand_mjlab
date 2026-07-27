@@ -3,5 +3,6 @@ from mjlab.rl.config import RslRlModelCfg as RslRlModelCfg
 from mjlab.rl.config import RslRlOnPolicyRunnerCfg as RslRlOnPolicyRunnerCfg
 from mjlab.rl.config import RslRlPpoAlgorithmCfg as RslRlPpoAlgorithmCfg
 from mjlab.rl.pointnet import PointNetModel as PointNetModel
+from mjlab.rl.ppo import StablePPO as StablePPO
 from mjlab.rl.runner import MjlabOnPolicyRunner as MjlabOnPolicyRunner
 from mjlab.rl.vecenv_wrapper import RslRlVecEnvWrapper as RslRlVecEnvWrapper

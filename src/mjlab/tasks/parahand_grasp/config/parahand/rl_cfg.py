@@ -15,9 +15,9 @@ def parahand_grasp_object_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
         "feature_dims": (32, 64, 128),
       },
       distribution_cfg={
-        "class_name": ("mjlab.rl.distributions:StateDependentTanhGaussianDistribution"),
+        "class_name": "mjlab.rl.distributions:TanhGaussianDistribution",
         "init_std": 1.0,
-        "min_std": 0.001,
+        "std_type": "scalar",
       },
     ),
     critic=RslRlModelCfg(
@@ -33,13 +33,14 @@ def parahand_grasp_object_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       },
     ),
     algorithm=RslRlPpoAlgorithmCfg(
+      class_name="mjlab.rl.ppo:StablePPO",
       value_loss_coef=1.0,
       use_clipped_value_loss=True,
       clip_param=0.2,
       entropy_coef=0.005,
       num_learning_epochs=2,
       num_mini_batches=32,
-      learning_rate=3.0e-4,
+      learning_rate=1.0e-4,
       schedule="adaptive",
       gamma=0.99,
       lam=0.95,
@@ -61,6 +62,6 @@ def parahand_grasp_object_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
 def parahand_only_grasp_object_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   cfg = parahand_grasp_object_ppo_runner_cfg()
   cfg.experiment_name = "parahand_only_grasp_object"
-  cfg.algorithm.learning_rate = 3.0e-4
+  cfg.algorithm.learning_rate = 1.0e-4
   cfg.algorithm.schedule = "fixed"
   return cfg

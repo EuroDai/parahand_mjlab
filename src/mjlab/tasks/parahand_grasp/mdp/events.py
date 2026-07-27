@@ -8,7 +8,7 @@ from mjlab.entity import Entity
 from mjlab.entity.variants import VARIANT_DEPENDENT_FIELDS
 from mjlab.utils.lab_api.math import quat_from_euler_xyz
 
-from .consts import NOMINAL_BOX_OBJECT_NAME, PRIMITIVE_OBJECTS
+from .consts import FIRST_LESSON_OBJECT_NAME, PRIMITIVE_OBJECTS
 
 _VARIANT_MODEL_FIELDS = (
   "geom_dataid",
@@ -36,22 +36,22 @@ class reset_variant_object_pose:
     if metadata is None:
       raise ValueError(f"Entity '{object_name}' has no variant metadata.")
     try:
-      self._nominal_box_variant_id = metadata.variant_names.index(
-        NOMINAL_BOX_OBJECT_NAME
+      self._first_lesson_variant_id = metadata.variant_names.index(
+        FIRST_LESSON_OBJECT_NAME
       )
     except ValueError as exc:
       raise ValueError(
-        f"Entity '{object_name}' must define variant '{NOMINAL_BOX_OBJECT_NAME}'."
+        f"Entity '{object_name}' must define variant '{FIRST_LESSON_OBJECT_NAME}'."
       ) from exc
 
-    nominal_worlds = (
-      self._assigned_variant_ids == self._nominal_box_variant_id
+    first_lesson_worlds = (
+      self._assigned_variant_ids == self._first_lesson_variant_id
     ).nonzero()
-    if len(nominal_worlds) == 0:
+    if len(first_lesson_worlds) == 0:
       raise ValueError(
-        f"At least one world must be assigned '{NOMINAL_BOX_OBJECT_NAME}'."
+        f"At least one world must be assigned '{FIRST_LESSON_OBJECT_NAME}'."
       )
-    nominal_world = int(nominal_worlds[0].item())
+    first_lesson_world = int(first_lesson_worlds[0].item())
     self._assigned_model_fields = {
       field: (
         env.sim.get_default_field(field)
@@ -60,8 +60,8 @@ class reset_variant_object_pose:
       )
       for field in _VARIANT_MODEL_FIELDS
     }
-    self._nominal_box_model_fields = {
-      field: values[nominal_world].clone()
+    self._first_lesson_model_fields = {
+      field: values[first_lesson_world].clone()
       for field, values in self._assigned_model_fields.items()
     }
     self._applied_stage = torch.full(
@@ -120,14 +120,14 @@ class reset_variant_object_pose:
     for field in _VARIANT_MODEL_FIELDS:
       model_field = getattr(env.sim.model, field)
       if curriculum_stage == 0:
-        model_field[changed_env_ids] = self._nominal_box_model_fields[field]
+        model_field[changed_env_ids] = self._first_lesson_model_fields[field]
       else:
         model_field[changed_env_ids] = self._assigned_model_fields[field][
           changed_env_ids
         ]
 
     if curriculum_stage == 0:
-      self.variant_ids[changed_env_ids] = self._nominal_box_variant_id
+      self.variant_ids[changed_env_ids] = self._first_lesson_variant_id
     else:
       self.variant_ids[changed_env_ids] = self._assigned_variant_ids[changed_env_ids]
     self._applied_stage[changed_env_ids] = curriculum_stage

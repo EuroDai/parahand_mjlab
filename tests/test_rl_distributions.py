@@ -1,44 +1,41 @@
 import math
 
-import pytest
 import torch
 from torch.distributions import Normal
 
-from mjlab.rl.distributions import StateDependentTanhGaussianDistribution
+from mjlab.rl.distributions import TanhGaussianDistribution
 
 
-def test_tanh_gaussian_outputs_are_bounded():
-  distribution = StateDependentTanhGaussianDistribution(
+def test_tanh_gaussian_postprocessed_outputs_are_bounded():
+  distribution = TanhGaussianDistribution(
     output_dim=4,
     init_std=1.0,
   )
   mean = torch.tensor([[0.0, 1.0, -2.0, 20.0]])
-  scale_logits = torch.zeros_like(mean)
-  mlp_output = torch.stack((mean, scale_logits), dim=-2)
-  distribution.update(mlp_output)
+  distribution.update(mean)
 
-  samples = torch.stack([distribution.sample() for _ in range(128)])
+  raw_samples = torch.stack([distribution.sample() for _ in range(128)])
+  samples = distribution.postprocess(raw_samples)
 
-  assert torch.all(samples > -1.0)
-  assert torch.all(samples < 1.0)
+  assert torch.all(samples >= -1.0)
+  assert torch.all(samples <= 1.0)
+  assert torch.any(raw_samples.abs() > 1.0)
   torch.testing.assert_close(
-    distribution.deterministic_output(mlp_output),
+    distribution.deterministic_output(mean),
     torch.tanh(mean),
   )
   torch.testing.assert_close(distribution.mean, torch.tanh(mean))
 
 
 def test_tanh_gaussian_log_prob_includes_change_of_variables():
-  distribution = StateDependentTanhGaussianDistribution(
+  distribution = TanhGaussianDistribution(
     output_dim=2,
     init_std=0.7,
   )
   mean = torch.tensor([[0.2, -0.4]])
   desired_std = torch.full_like(mean, 0.7)
-  scale_logits = torch.log(torch.expm1(desired_std - distribution.min_std))
   pre_tanh = torch.tensor([[0.5, -1.2]])
-  actions = torch.tanh(pre_tanh)
-  distribution.update(torch.stack((mean, scale_logits), dim=-2))
+  distribution.update(mean)
 
   base = Normal(mean, desired_std)
   log_det = 2.0 * (
@@ -46,46 +43,48 @@ def test_tanh_gaussian_log_prob_includes_change_of_variables():
   )
   expected = (base.log_prob(pre_tanh) - log_det).sum(dim=-1)
 
-  torch.testing.assert_close(distribution.log_prob(actions), expected)
+  torch.testing.assert_close(distribution.log_prob(pre_tanh), expected)
 
 
-def test_tanh_gaussian_boundary_log_prob_and_entropy_are_finite():
-  distribution = StateDependentTanhGaussianDistribution(
+def test_tanh_gaussian_saturated_postprocessing_log_prob_and_entropy_are_finite():
+  distribution = TanhGaussianDistribution(
     output_dim=3,
     init_std=1.0,
   )
   mean = torch.zeros(2, 3, requires_grad=True)
-  scale_logits = torch.zeros(2, 3, requires_grad=True)
-  distribution.update(torch.stack((mean, scale_logits), dim=-2))
+  distribution.update(mean)
 
-  boundary_actions = torch.tensor(
-    [[-1.0, 0.0, 1.0], [1.0, -1.0, 0.5]],
+  raw_actions = torch.tensor(
+    [[-100.0, 0.0, 100.0], [100.0, -100.0, 0.5]],
   )
-  objective = distribution.log_prob(boundary_actions).sum()
+  objective = distribution.log_prob(raw_actions).sum()
   objective = objective + distribution.entropy.sum()
   objective.backward()
 
   assert torch.isfinite(objective)
   assert mean.grad is not None
   assert torch.all(torch.isfinite(mean.grad))
-  assert scale_logits.grad is not None
-  assert torch.all(torch.isfinite(scale_logits.grad))
+  assert distribution.std_param.grad is not None
+  assert torch.all(torch.isfinite(distribution.std_param.grad))
+  assert torch.all(distribution.postprocess(raw_actions).abs() <= 1.0)
 
 
-def test_tanh_gaussian_std_depends_on_network_output():
-  distribution = StateDependentTanhGaussianDistribution(output_dim=2)
-  mean = torch.zeros(2, 2)
-  scale_logits = torch.tensor([[-2.0, 0.0], [1.0, 2.0]])
+def test_tanh_gaussian_uses_state_independent_std_and_mean_only_output():
+  distribution = TanhGaussianDistribution(output_dim=2, init_std=0.7)
+  first_mean = torch.zeros(2, 2)
+  second_mean = torch.ones(2, 2)
 
-  distribution.update(torch.stack((mean, scale_logits), dim=-2))
+  distribution.update(first_mean)
+  first_std = distribution.std.clone()
+  distribution.update(second_mean)
 
-  expected = torch.nn.functional.softplus(scale_logits) + distribution.min_std
-  torch.testing.assert_close(distribution.std, expected)
-  assert not torch.equal(distribution.std[0], distribution.std[1])
+  assert distribution.input_dim == 2
+  torch.testing.assert_close(first_std, torch.full_like(first_mean, 0.7))
+  torch.testing.assert_close(distribution.std, first_std)
 
 
 def test_tanh_gaussian_kl_uses_pre_tanh_gaussians():
-  distribution = StateDependentTanhGaussianDistribution(
+  distribution = TanhGaussianDistribution(
     output_dim=2,
     init_std=0.5,
   )
@@ -106,17 +105,24 @@ def test_tanh_gaussian_kl_uses_pre_tanh_gaussians():
   torch.testing.assert_close(actual, expected)
 
 
-def test_tanh_gaussian_validates_squash_epsilon():
-  with pytest.raises(ValueError, match="squash_epsilon"):
-    StateDependentTanhGaussianDistribution(output_dim=2, squash_epsilon=0.0)
+def test_tanh_gaussian_log_prob_uses_raw_action_after_tanh_saturation():
+  distribution = TanhGaussianDistribution(output_dim=1, init_std=0.3)
+  old_mean = torch.tensor([[98.8]])
+  raw_action = old_mean.clone()
+  distribution.update(old_mean)
+  old_log_prob = distribution.log_prob(raw_action)
 
+  new_mean = torch.tensor([[98.78]])
+  distribution.update(new_mean)
+  new_log_prob = distribution.log_prob(raw_action)
 
-def test_tanh_gaussian_validates_standard_deviations():
-  with pytest.raises(ValueError, match="min_std"):
-    StateDependentTanhGaussianDistribution(output_dim=2, min_std=0.0)
-  with pytest.raises(ValueError, match="init_std"):
-    StateDependentTanhGaussianDistribution(
-      output_dim=2,
-      init_std=0.001,
-      min_std=0.001,
-    )
+  log_ratio = new_log_prob - old_log_prob
+
+  torch.testing.assert_close(
+    log_ratio,
+    torch.tensor([-0.0022222222]),
+    atol=1e-4,
+    rtol=0,
+  )
+  assert log_ratio.abs().item() < 0.01
+  assert distribution.postprocess(raw_action).item() == 1.0

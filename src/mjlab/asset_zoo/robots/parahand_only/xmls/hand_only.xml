@@ -100,6 +100,7 @@
         <body name="palm" pos="0 0 0" euler="3.14 1.57 -1.57" childclass="hand">
             <site name="wrist_origin" size="0.002" rgba="1 0 0 1"/>
             <site name="inner_palm_5" pos="-0.00249 -0.021 0.1" size="0.002" rgba="0 0 1 1"/>
+            <geom pos="0 0 -0.044" zaxis="1 0 0" rgba="0.89804 0.91765 0.92941 1" type="capsule" size="0.0225 0.0335" contype="262144" conaffinity="2097343"/>
             <geom name="palm_collision_1" type="box" pos="-0.00249 0.00075 0.1" size="0.045 0.02175 0.04" class="palm_collision" contype="262144" conaffinity="2097343"/>
             <joint name="palm_translation_x" axis="0 0 1" class="palm_translation" range="-0.5 0.5"/>
             <joint name="palm_translation_y" axis="1 0 0" class="palm_translation" range="-0.5 0.5"/>

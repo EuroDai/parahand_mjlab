@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import mujoco
 
-NOMINAL_BOX_OBJECT_NAME = "object_box"
+FIRST_LESSON_OBJECT_NAME = "object_capsule"
 OBJECT_SCALE_RANGE = (0.75, 1.5)
 OBJECT_SCALE_FACTORS = (
   1.0,
@@ -35,7 +35,15 @@ class PrimitiveObject:
 
 _BASE_PRIMITIVE_OBJECTS = (
   PrimitiveObject(
-    name=NOMINAL_BOX_OBJECT_NAME,
+    name=FIRST_LESSON_OBJECT_NAME,
+    geom_type=mujoco.mjtGeom.mjGEOM_CAPSULE,
+    size=(0.02, 0.035, 0.0),
+    geom_quat=(0.7071067811865476, -0.7071067811865475, 0.0, 0.0),
+    rgba=(0.7, 0.2, 1.0, 1.0),
+    floor_offset=0.02,
+  ),
+  PrimitiveObject(
+    name="object_box",
     geom_type=mujoco.mjtGeom.mjGEOM_BOX,
     size=(0.03, 0.03, 0.03),
     geom_quat=(1.0, 0.0, 0.0, 0.0),
@@ -49,14 +57,6 @@ _BASE_PRIMITIVE_OBJECTS = (
     geom_quat=(1.0, 0.0, 0.0, 0.0),
     rgba=(0.1, 0.4, 1.0, 1.0),
     floor_offset=0.03,
-  ),
-  PrimitiveObject(
-    name="object_capsule",
-    geom_type=mujoco.mjtGeom.mjGEOM_CAPSULE,
-    size=(0.02, 0.035, 0.0),
-    geom_quat=(0.7071067811865476, -0.7071067811865475, 0.0, 0.0),
-    rgba=(0.7, 0.2, 1.0, 1.0),
-    floor_offset=0.02,
   ),
 )
 

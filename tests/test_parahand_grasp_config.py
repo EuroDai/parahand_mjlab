@@ -42,7 +42,7 @@ from mjlab.tasks.parahand_grasp.mdp.actions import (
   RelativeTendonLengthActionCfg,
 )
 from mjlab.tasks.parahand_grasp.mdp.consts import (
-  NOMINAL_BOX_OBJECT_NAME,
+  FIRST_LESSON_OBJECT_NAME,
   OBJECT_SCALE_FACTORS,
   OBJECT_SCALE_RANGE,
   PRIMITIVE_OBJECTS,
@@ -69,7 +69,8 @@ def test_object_spec_contains_all_curriculum_primitives():
 
 
 def test_mesh_surface_sampler_uses_compiled_mesh_faces():
-  model = get_object_spec(PRIMITIVE_OBJECTS[0]).compile()
+  box = next(obj for obj in PRIMITIVE_OBJECTS if obj.name == "object_box")
+  model = get_object_spec(box).compile()
 
   points = _sample_model_surface_points(model, num_points=256, device="cpu")
 
@@ -78,7 +79,7 @@ def test_mesh_surface_sampler_uses_compiled_mesh_faces():
   assert torch.all(points.abs() <= 0.03 + 1.0e-6)
 
 
-def test_object_curriculum_starts_with_box_then_uses_scaled_variants():
+def test_object_curriculum_starts_with_capsule_then_uses_scaled_variants():
   cfg = parahand_grasp_object_env_cfg()
 
   command_cfg = cfg.commands["object_pose"]
@@ -89,7 +90,8 @@ def test_object_curriculum_starts_with_box_then_uses_scaled_variants():
   assert isinstance(object_cfg, VariantEntityCfg)
   assert tuple(object_cfg.variants) == tuple(obj.name for obj in PRIMITIVE_OBJECTS)
   assert object_cfg.assignment is None
-  assert next(iter(object_cfg.variants)) == NOMINAL_BOX_OBJECT_NAME
+  assert FIRST_LESSON_OBJECT_NAME == "object_capsule"
+  assert next(iter(object_cfg.variants)) == FIRST_LESSON_OBJECT_NAME
   assert len(object_cfg.variants) == 3 * len(OBJECT_SCALE_FACTORS)
   assert min(OBJECT_SCALE_FACTORS) == OBJECT_SCALE_RANGE[0]
   assert max(OBJECT_SCALE_FACTORS) == OBJECT_SCALE_RANGE[1]
@@ -210,13 +212,13 @@ def test_object_curriculum_promotes_at_isaac_final_success_threshold():
   assert state["window_count"].item() == 0.0
 
 
-def test_object_reset_switches_between_box_lesson_and_assigned_variants():
+def test_object_reset_switches_between_capsule_lesson_and_assigned_variants():
   num_envs = 3
   assigned_fields = {
     field: torch.arange(num_envs, dtype=torch.float32).reshape(num_envs, 1)
     for field in _VARIANT_MODEL_FIELDS
   }
-  nominal_fields = {field: torch.tensor([9.0]) for field in _VARIANT_MODEL_FIELDS}
+  lesson_fields = {field: torch.tensor([9.0]) for field in _VARIANT_MODEL_FIELDS}
   model = SimpleNamespace(
     **{field: torch.zeros_like(values) for field, values in assigned_fields.items()}
   )
@@ -227,16 +229,16 @@ def test_object_reset_switches_between_box_lesson_and_assigned_variants():
   )
   event = object.__new__(reset_variant_object_pose)
   event._assigned_model_fields = assigned_fields
-  event._nominal_box_model_fields = nominal_fields
+  event._first_lesson_model_fields = lesson_fields
   event._assigned_variant_ids = torch.tensor([0, 1, 2])
   event.variant_ids = event._assigned_variant_ids.clone()
-  event._nominal_box_variant_id = 0
+  event._first_lesson_variant_id = 2
   event._applied_stage = torch.full((num_envs,), -1, dtype=torch.int8)
   apply_stage = cast(Any, event._apply_curriculum_stage)
   env_ids = torch.arange(num_envs)
 
   apply_stage(env, env_ids, 0)
-  assert event.variant_ids.tolist() == [0, 0, 0]
+  assert event.variant_ids.tolist() == [2, 2, 2]
   for field in _VARIANT_MODEL_FIELDS:
     assert torch.all(getattr(model, field) == 9.0)
 
@@ -579,12 +581,12 @@ def test_parahand_only_task_uses_xml_home_and_requested_action_scales():
   assert not play_cfg.observations["actor"].enable_corruption
   assert "object_point_cloud_debug" in play_cfg.rewards
   assert agent_cfg.experiment_name == "parahand_only_grasp_object"
-  assert agent_cfg.algorithm.learning_rate == 3.0e-4
+  assert agent_cfg.algorithm.learning_rate == 1.0e-4
   assert agent_cfg.algorithm.schedule == "fixed"
   assert agent_cfg.actor.distribution_cfg == {
-    "class_name": ("mjlab.rl.distributions:StateDependentTanhGaussianDistribution"),
+    "class_name": "mjlab.rl.distributions:TanhGaussianDistribution",
     "init_std": 1.0,
-    "min_std": 0.001,
+    "std_type": "scalar",
   }
 
   fingertip_quat_cfg = cfg.observations["actor"].terms["fingertip_quat_b"]
@@ -619,13 +621,14 @@ def test_training_config_matches_playground_horizon_and_ppo_settings():
   assert agent_cfg.max_iterations == 763
   assert agent_cfg.algorithm.num_learning_epochs == 2
   assert agent_cfg.algorithm.num_mini_batches == 32
-  assert agent_cfg.algorithm.learning_rate == 3.0e-4
+  assert agent_cfg.algorithm.learning_rate == 1.0e-4
   assert agent_cfg.algorithm.schedule == "adaptive"
   assert agent_cfg.algorithm.entropy_coef == 0.005
   assert agent_cfg.algorithm.value_loss_coef == 1.0
   assert agent_cfg.algorithm.use_clipped_value_loss
+  assert agent_cfg.algorithm.class_name == "mjlab.rl.ppo:StablePPO"
   assert agent_cfg.actor.distribution_cfg == {
-    "class_name": ("mjlab.rl.distributions:StateDependentTanhGaussianDistribution"),
+    "class_name": "mjlab.rl.distributions:TanhGaussianDistribution",
     "init_std": 1.0,
-    "min_std": 0.001,
+    "std_type": "scalar",
   }
