@@ -45,9 +45,10 @@ Changed
   gates contact and position-tracking rewards; success remains position-only.
 - ParaHand grasp rewards now include reset-relative vertical lift progress, normalized
   by the current target height and gated by the smooth contact score.
-- ParaHand relative joint and tendon actions now compute one control target per
-  policy step and hold it across all simulation substeps, instead of recomputing
-  the target relative to the latest state at every simulation substep.
+- ParaHand relative joint actions now accumulate each policy delta from the previous
+  control target, while tendon actions compute one target per policy step. Both hold
+  their targets across all simulation substeps instead of recomputing them relative
+  to the latest state at every simulation substep.
 - The ParaHand grasp task now uses three lessons. It starts with a single nominal
   cube at a randomized position with a fixed yaw and target. Every lesson resets
   controllable robot joints with noise around the XML home keyframe. Each environment
