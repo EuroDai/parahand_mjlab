@@ -85,10 +85,11 @@ class ParaHandRelativeJointPositionActionCfg(_ClippedActionCfg):
 
 
 class ParaHandRelativeJointPositionAction(_ClippedAction):
-  """Per-policy-step joint targets relative to current angles.
+  """Persistent joint targets advanced by each policy action.
 
-  The relative target is computed once when the policy action is processed.
-  Every physics substep then tracks that same target.
+  Each policy action is added to the previous control target. Every physics
+  substep then tracks that same target until the next policy step. Resets
+  re-anchor the target to the measured joint positions.
   """
 
   _ctrl_target: torch.Tensor
@@ -117,8 +118,7 @@ class ParaHandRelativeJointPositionAction(_ClippedAction):
 
   def process_actions(self, actions: torch.Tensor) -> None:
     super().process_actions(actions)
-    current_position = self._entity.data.joint_pos[:, self.target_ids]
-    target = current_position + self._processed_actions
+    target = self._ctrl_target + self._processed_actions
     target = target.clamp(self._ctrl_range[..., 0], self._ctrl_range[..., 1])
     self._apply_mcp_1_constraints(target)
     self._ctrl_target.copy_(target)

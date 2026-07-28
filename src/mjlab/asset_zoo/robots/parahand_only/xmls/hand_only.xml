@@ -58,11 +58,11 @@
         </default>
         <default class="palm_translation">
             <joint type="slide" solreflimit=".001 1" solimplimit="0.97 0.99 0.00001 0.1 2" damping="1"/>
-            <position ctrllimited="true" inheritrange="1" kp="300" kv="40" forcerange="-200 200"/>
+            <position ctrllimited="true" inheritrange="1" kp="600" kv="40" forcerange="-200 200"/>
         </default>
         <default class="palm_rotation">
             <joint type="hinge" solreflimit=".001 1" solimplimit="0.97 0.99 0.00001 0.1 2" damping="1" limited="true" range="-1 1"/>
-            <position ctrllimited="true" inheritrange="1" kp="60" kv="8" forcerange="-80 80"/>
+            <position ctrllimited="true" inheritrange="1" kp="60" kv="4" forcerange="-80 80"/>
         </default>
         <default class="cube">
             <geom friction="2.0 0.1 0.002" contype="2097152" conaffinity="2097151" condim="4" />
