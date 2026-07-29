@@ -26,9 +26,11 @@ from mjlab.asset_zoo.robots.parahand_only.parahand_only_constants import (
 from mjlab.asset_zoo.robots.parahand_only.parahand_only_constants import (
   get_spec as get_parahand_only_spec,
 )
-from mjlab.entity import VariantEntityCfg
+from mjlab.entity import EntityCfg, VariantEntityCfg
+from mjlab.scripts.play import _apply_curriculum_stage_override
 from mjlab.tasks.manipulation.mdp import LiftingCommand, LiftingCommandCfg
 from mjlab.tasks.parahand_grasp.config.parahand.env_cfgs import (
+  get_mesh_object_cfg,
   get_object_spec,
   parahand_grasp_object_env_cfg,
   parahand_only_grasp_object_env_cfg,
@@ -43,43 +45,35 @@ from mjlab.tasks.parahand_grasp.mdp.actions import (
 )
 from mjlab.tasks.parahand_grasp.mdp.consts import (
   FIRST_LESSON_OBJECT_NAME,
-  OBJECT_SCALE_FACTORS,
   OBJECT_SCALE_RANGE,
   PRIMITIVE_OBJECTS,
 )
 from mjlab.tasks.parahand_grasp.mdp.curriculums import object_lesson_curriculum
-from mjlab.tasks.parahand_grasp.mdp.events import (
-  _VARIANT_MODEL_FIELDS,
-  reset_variant_object_pose,
-)
+from mjlab.tasks.parahand_grasp.mdp.events import reset_primitive_object_pose
 from mjlab.tasks.parahand_grasp.mdp.observations import (
-  _sample_model_surface_points,
   object_point_cloud_b,
   object_quaternion_b,
 )
 
 
 def test_object_spec_contains_all_curriculum_primitives():
-  for obj in PRIMITIVE_OBJECTS:
-    model = get_object_spec(obj).compile()
-    geom_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, 0)
+  model = get_object_spec().compile()
 
-    assert geom_name == "object_geom"
-    assert mujoco.mjtGeom(model.geom_type[0]) == mujoco.mjtGeom.mjGEOM_MESH
-
-
-def test_mesh_surface_sampler_uses_compiled_mesh_faces():
-  box = next(obj for obj in PRIMITIVE_OBJECTS if obj.name == "object_box")
-  model = get_object_spec(box).compile()
-
-  points = _sample_model_surface_points(model, num_points=256, device="cpu")
-
-  assert points.shape == (256, 3)
-  assert torch.isfinite(points).all()
-  assert torch.all(points.abs() <= 0.03 + 1.0e-6)
+  assert model.ngeom == len(PRIMITIVE_OBJECTS)
+  assert tuple(mujoco.mjtGeom(model.geom_type[i]) for i in range(model.ngeom)) == tuple(
+    obj.geom_type for obj in PRIMITIVE_OBJECTS
+  )
+  assert all(model.geom_dataid[i] == -1 for i in range(model.ngeom))
 
 
-def test_object_curriculum_starts_with_capsule_then_uses_scaled_variants():
+def test_mesh_object_factory_keeps_future_ycb_variant_path():
+  cfg = get_mesh_object_cfg({"example_ycb_object": get_object_spec})
+
+  assert isinstance(cfg, VariantEntityCfg)
+  assert tuple(cfg.variants) == ("example_ycb_object",)
+
+
+def test_object_curriculum_uses_continuously_randomized_primitives():
   cfg = parahand_grasp_object_env_cfg()
 
   command_cfg = cfg.commands["object_pose"]
@@ -87,17 +81,14 @@ def test_object_curriculum_starts_with_capsule_then_uses_scaled_variants():
   curriculum_cfg = cfg.curriculum["object_lesson"]
   object_cfg = cfg.scene.entities["object"]
 
-  assert isinstance(object_cfg, VariantEntityCfg)
-  assert tuple(object_cfg.variants) == tuple(obj.name for obj in PRIMITIVE_OBJECTS)
-  assert object_cfg.assignment is None
+  assert isinstance(object_cfg, EntityCfg)
   assert FIRST_LESSON_OBJECT_NAME == "object_capsule"
-  assert next(iter(object_cfg.variants)) == FIRST_LESSON_OBJECT_NAME
-  assert len(object_cfg.variants) == 3 * len(OBJECT_SCALE_FACTORS)
-  assert min(OBJECT_SCALE_FACTORS) == OBJECT_SCALE_RANGE[0]
-  assert max(OBJECT_SCALE_FACTORS) == OBJECT_SCALE_RANGE[1]
+  assert len(PRIMITIVE_OBJECTS) == 3
+  assert OBJECT_SCALE_RANGE == (0.75, 1.0)
   assert isinstance(command_cfg, LiftingCommandCfg)
   assert command_cfg.object_pose_range is None
-  assert not hasattr(reset_cfg.func, "model_fields")
+  assert "geom_size" in reset_cfg.func.model_fields
+  assert "body_inertia" in reset_cfg.func.model_fields
   assert all(event_cfg.mode == "reset" for event_cfg in cfg.events.values())
   assert reset_cfg.params["curriculum_stage"] == 0
   point_cloud_cfg = cfg.observations["actor"].terms["object_point_cloud_b"]
@@ -118,6 +109,35 @@ def test_object_curriculum_starts_with_capsule_then_uses_scaled_variants():
   assert curriculum_cfg.params["success_threshold"] == 0.05
   assert curriculum_cfg.params["success_window_size"] == 4096
   assert curriculum_cfg.params["min_completed_episodes"] == 1024
+
+
+@pytest.mark.parametrize("stage", [1, 2])
+def test_play_curriculum_override_selects_randomized_lesson(stage):
+  cfg = parahand_only_grasp_object_env_cfg(play=True)
+
+  _apply_curriculum_stage_override(cfg, stage)
+
+  assert cfg.events["reset_object_pose"].params["curriculum_stage"] == stage
+  assert cfg.curriculum == {}
+  command_cfg = cfg.commands["object_pose"]
+  assert isinstance(command_cfg, LiftingCommandCfg)
+  target_range = command_cfg.target_position_range
+  assert target_range.x == (-0.1, 0.1)
+  assert target_range.y == (-0.1, 0.1)
+  assert target_range.z == (0.35, 0.55)
+
+
+def test_play_curriculum_override_keeps_first_lesson_target_fixed():
+  cfg = parahand_only_grasp_object_env_cfg(play=True)
+
+  _apply_curriculum_stage_override(cfg, 0)
+
+  command_cfg = cfg.commands["object_pose"]
+  assert isinstance(command_cfg, LiftingCommandCfg)
+  target_range = command_cfg.target_position_range
+  assert target_range.x == (0.0, 0.0)
+  assert target_range.y == (0.0, 0.0)
+  assert target_range.z == (0.45, 0.45)
 
 
 def test_grasp_rewards_use_aligned_smooth_contact_gate():
@@ -212,53 +232,79 @@ def test_object_curriculum_promotes_at_isaac_final_success_threshold():
   assert state["window_count"].item() == 0.0
 
 
-def test_object_reset_switches_between_capsule_lesson_and_assigned_variants():
-  num_envs = 3
-  assigned_fields = {
-    field: torch.arange(num_envs, dtype=torch.float32).reshape(num_envs, 1)
-    for field in _VARIANT_MODEL_FIELDS
-  }
-  lesson_fields = {field: torch.tensor([9.0]) for field in _VARIANT_MODEL_FIELDS}
-  model = SimpleNamespace(
-    **{field: torch.zeros_like(values) for field, values in assigned_fields.items()}
-  )
-  env = SimpleNamespace(
-    sim=SimpleNamespace(
-      model=model,
-    )
-  )
-  event = object.__new__(reset_variant_object_pose)
-  event._assigned_model_fields = assigned_fields
-  event._first_lesson_model_fields = lesson_fields
-  event._assigned_variant_ids = torch.tensor([0, 1, 2])
-  event.variant_ids = event._assigned_variant_ids.clone()
-  event._first_lesson_variant_id = 2
-  event._applied_stage = torch.full((num_envs,), -1, dtype=torch.int8)
-  apply_stage = cast(Any, event._apply_curriculum_stage)
+def test_object_reset_samples_continuous_dimensions_bounded_by_defaults():
+  num_envs = 1000
+  event = object.__new__(reset_primitive_object_pose)
+  event._base_sizes = torch.tensor([obj.size for obj in PRIMITIVE_OBJECTS])
+  event.shape_ids = torch.zeros(num_envs, dtype=torch.long)
+  event.sizes = torch.zeros(num_envs, 3)
   env_ids = torch.arange(num_envs)
 
-  apply_stage(env, env_ids, 0)
-  assert event.variant_ids.tolist() == [2, 2, 2]
-  for field in _VARIANT_MODEL_FIELDS:
-    assert torch.all(getattr(model, field) == 9.0)
+  event._sample_primitives(env_ids, 1)
 
-  apply_stage(env, env_ids, 1)
-  assert event.variant_ids.tolist() == [0, 1, 2]
-  for field, assigned in assigned_fields.items():
-    torch.testing.assert_close(getattr(model, field), assigned)
+  assert set(event.shape_ids.tolist()) == {0, 1, 2}
+  selected_defaults = event._base_sizes[event.shape_ids]
+  positive = selected_defaults > 0
+  assert torch.all(event.sizes[positive] <= selected_defaults[positive])
+  assert torch.all(
+    event.sizes[positive] >= selected_defaults[positive] * OBJECT_SCALE_RANGE[0]
+  )
+  box_sizes = event.sizes[event.shape_ids == 1]
+  assert torch.any(box_sizes[:, 0] != box_sizes[:, 1])
+  assert torch.any(box_sizes[:, 1] != box_sizes[:, 2])
 
-  apply_stage(env, env_ids, 2)
-  assert event.variant_ids.tolist() == [0, 1, 2]
-  for field, assigned in assigned_fields.items():
-    torch.testing.assert_close(getattr(model, field), assigned)
+
+def test_object_dimensions_change_only_when_entering_physical_lesson():
+  event = cast(Any, object.__new__(reset_primitive_object_pose))
+  event._applied_stage = torch.full((3,), -1, dtype=torch.int8)
+  event._sample_primitives = Mock()
+  event._write_primitive_model = Mock()
+  env = SimpleNamespace(
+    sim=SimpleNamespace(recompute_constants=Mock()),
+  )
+  env_ids = torch.arange(3)
+
+  event._apply_curriculum_stage(env, env_ids, 0)
+  event._apply_curriculum_stage(env, env_ids, 0)
+  event._apply_curriculum_stage(env, env_ids, 1)
+  event._apply_curriculum_stage(env, env_ids, 1)
+  event._apply_curriculum_stage(env, env_ids, 2)
+
+  assert event._sample_primitives.call_count == 2
+  assert event._write_primitive_model.call_count == 2
+  assert env.sim.recompute_constants.call_count == 2
+  assert event._applied_stage.tolist() == [2, 2, 2]
+
+
+def test_inactive_primitive_slots_are_tiny_without_displacement():
+  event = cast(Any, object.__new__(reset_primitive_object_pose))
+  event._geom_ids = torch.arange(3)
+  event._base_sizes = torch.tensor([obj.size for obj in PRIMITIVE_OBJECTS])
+  event._colors = torch.tensor([obj.rgba for obj in PRIMITIVE_OBJECTS])
+  event.shape_ids = torch.tensor([1])
+  event.sizes = torch.tensor([[0.02, 0.025, 0.03]])
+  event._write_bounds = Mock()
+  event._write_inertia = Mock()
+  model = SimpleNamespace(
+    geom_size=torch.zeros(1, 3, 3),
+    geom_pos=torch.zeros(1, 3, 3),
+    geom_rgba=torch.zeros(1, 3, 4),
+  )
+  env = SimpleNamespace(device="cpu", sim=SimpleNamespace(model=model))
+
+  event._write_primitive_model(env, torch.tensor([0]))
+
+  torch.testing.assert_close(model.geom_size[0, 1], event.sizes[0])
+  assert torch.all(model.geom_size[0, (0, 2)] == 1.0e-6)
+  assert torch.all(model.geom_pos == 0.0)
+  assert model.geom_rgba[0, :, 3].tolist() == [0.0, 1.0, 0.0]
 
 
 def test_object_position_randomizes_in_first_lesson_and_yaw_in_second():
   num_envs = 2
-  event = cast(Any, object.__new__(reset_variant_object_pose))
+  event = cast(Any, object.__new__(reset_primitive_object_pose))
   event._apply_curriculum_stage = Mock()
-  event.variant_ids = torch.zeros(num_envs, dtype=torch.long)
-  event._floor_offsets = torch.tensor([0.025])
+  event._floor_offsets = Mock(return_value=torch.full((num_envs,), 0.025))
   event.object = SimpleNamespace(
     write_root_link_pose_to_sim=Mock(),
     write_root_link_velocity_to_sim=Mock(),

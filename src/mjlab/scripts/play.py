@@ -51,11 +51,40 @@ class PlayConfig:
   viewer: Literal["auto", "native", "viser"] = "auto"
   no_terminations: bool = False
   """Disable all termination conditions (useful for viewing motions with dummy agents)."""
+  curriculum_stage: int | None = None
+  """Force a curriculum stage for evaluation instead of advancing it online."""
   log_root: str = "logs/rsl_rl"
   """Root directory under which experiment logs are written."""
 
   # Internal flag used by demo script.
   _demo_mode: tyro.conf.Suppress[bool] = False
+
+
+def _apply_curriculum_stage_override(env_cfg, stage: int) -> None:
+  if stage not in (0, 1, 2):
+    raise ValueError(f"curriculum_stage must be 0, 1, or 2, got {stage}.")
+  curriculum_cfg = env_cfg.curriculum.get("object_lesson")
+  if curriculum_cfg is None:
+    raise ValueError(
+      "--curriculum-stage is only supported for tasks with an object_lesson curriculum."
+    )
+
+  event_name = curriculum_cfg.params["event_name"]
+  command_name = curriculum_cfg.params["command_name"]
+  event_cfg = env_cfg.events[event_name]
+  event_cfg.params["curriculum_stage"] = stage
+
+  if stage == 0:
+    target_range = env_cfg.commands[command_name].target_position_range
+    for axis in ("x", "y", "z"):
+      low, high = getattr(target_range, axis)
+      midpoint = (low + high) * 0.5
+      setattr(target_range, axis, (midpoint, midpoint))
+
+  # The online curriculum initializes itself at stage 0. Remove it during play so
+  # it cannot overwrite the explicit evaluation stage.
+  env_cfg.curriculum = {}
+  print(f"[INFO]: Curriculum stage forced to {stage}")
 
 
 def run_play(task_id: str, cfg: PlayConfig):
@@ -65,6 +94,9 @@ def run_play(task_id: str, cfg: PlayConfig):
 
   env_cfg = load_env_cfg(task_id, play=True)
   agent_cfg = load_rl_cfg(task_id)
+
+  if cfg.curriculum_stage is not None:
+    _apply_curriculum_stage_override(env_cfg, cfg.curriculum_stage)
 
   DUMMY_MODE = cfg.agent in {"zero", "random"}
   TRAINED_MODE = not DUMMY_MODE

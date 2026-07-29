@@ -248,7 +248,7 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
       },
     ),
     "reset_object_pose": EventTermCfg(
-      func=parahand_mdp.reset_variant_object_pose,
+      func=parahand_mdp.reset_primitive_object_pose,
       mode="reset",
       params={
         "object_name": "object",

@@ -166,37 +166,36 @@ class object_point_cloud_b:
     )
     self._latest_points_w: torch.Tensor | None = None
     obj: Entity = env.scene[object_name]
-    variant_ids = env.sim.world_to_variant.get(object_name)
-    if variant_ids is None:
-      raise ValueError(f"Entity '{object_name}' must use VariantEntityCfg.")
-    self._variant_ids = variant_ids.to(device=env.device, dtype=torch.long)
-
+    reset_term = self._curriculum_event_cfg.func
+    self._primitive_reset = (
+      reset_term
+      if hasattr(reset_term, "shape_ids") and hasattr(reset_term, "sizes")
+      else None
+    )
     metadata = obj.variant_metadata
-    if metadata is None:
-      raise ValueError(f"Entity '{object_name}' has no variant metadata.")
-    primitive_by_name = {primitive.name: primitive for primitive in PRIMITIVE_OBJECTS}
-    point_pools = []
-    for variant_idx, variant_name in enumerate(metadata.variant_names):
-      primitive = primitive_by_name.get(variant_name)
-      if primitive is not None:
-        geom_size = torch.tensor(primitive.size, device=env.device).reshape(1, 3)
-        points = _sample_primitive_surface_points(
-          primitive.geom_type.value,
-          geom_size,
-          self._pool_size,
-        ).squeeze(0)
-        geom_quat = torch.tensor(
-          primitive.geom_quat,
-          device=env.device,
-          dtype=points.dtype,
-        ).expand(self._pool_size, -1)
-        point_pools.append(quat_apply(geom_quat, points))
-      else:
+    if self._primitive_reset is not None:
+      self._variant_ids = None
+      self._points_local = torch.empty(
+        env.num_envs, self._pool_size, 3, device=env.device
+      )
+      self._refresh_primitive_points(
+        torch.arange(env.num_envs, device=env.device, dtype=torch.long)
+      )
+    else:
+      variant_ids = env.sim.world_to_variant.get(object_name)
+      if variant_ids is None or metadata is None:
+        raise ValueError(
+          f"Entity '{object_name}' must use analytic primitive reset state "
+          "or VariantEntityCfg mesh assets."
+        )
+      self._variant_ids = variant_ids.to(device=env.device, dtype=torch.long)
+      point_pools = []
+      for variant_idx in range(len(metadata.variant_names)):
         source_model = metadata.variant_source_specs[variant_idx].compile()
         point_pools.append(
           _sample_model_surface_points(source_model, self._pool_size, env.device)
         )
-    self._points_local = torch.stack(point_pools)
+      self._points_local = torch.stack(point_pools)
     self._cached_sample_ids = self._draw_sample_ids(env.num_envs, env.device)
 
   def __call__(
@@ -233,13 +232,20 @@ class object_point_cloud_b:
 
     curriculum_stage = int(self._curriculum_event_cfg.params["curriculum_stage"])
     if curriculum_stage >= self._dynamic_sampling_stage:
+      if getattr(self, "_primitive_reset", None) is not None:
+        self._refresh_primitive_points(
+          torch.arange(env.num_envs, device=env.device, dtype=torch.long)
+        )
       sample_ids = self._draw_sample_ids(env.num_envs, env.device)
     else:
       sample_ids = self._cached_sample_ids
+    point_pools = (
+      self._points_local
+      if self._variant_ids is None
+      else self._points_local[self._variant_ids]
+    )
     points_local = torch.gather(
-      self._points_local[self._variant_ids],
-      dim=1,
-      index=sample_ids.unsqueeze(-1).expand(-1, -1, 3),
+      point_pools, dim=1, index=sample_ids.unsqueeze(-1).expand(-1, -1, 3)
     )
 
     object_quat_w = obj.data.root_link_quat_w[:, None, :].expand(-1, sample_size, -1)
@@ -267,10 +273,39 @@ class object_point_cloud_b:
       env_ids = slice(None)
     curriculum_stage = int(self._curriculum_event_cfg.params["curriculum_stage"])
     if curriculum_stage < self._dynamic_sampling_stage:
+      if getattr(self, "_primitive_reset", None) is not None:
+        refresh_ids = torch.arange(
+          self._points_local.shape[0],
+          device=self._points_local.device,
+          dtype=torch.long,
+        )[env_ids]
+        self._refresh_primitive_points(refresh_ids)
       num_envs = self._cached_sample_ids[env_ids].shape[0]
       self._cached_sample_ids[env_ids] = self._draw_sample_ids(
         num_envs, self._cached_sample_ids.device
       )
+
+  def _refresh_primitive_points(self, env_ids: torch.Tensor) -> None:
+    primitive_reset = getattr(self, "_primitive_reset", None)
+    if primitive_reset is None or len(env_ids) == 0:
+      return
+    shape_ids = primitive_reset.shape_ids[env_ids]
+    sizes = primitive_reset.sizes[env_ids]
+    for shape_id, primitive in enumerate(PRIMITIVE_OBJECTS):
+      mask = shape_ids == shape_id
+      if not mask.any():
+        continue
+      points = _sample_primitive_surface_points(
+        primitive.geom_type.value,
+        sizes[mask],
+        self._pool_size,
+      )
+      geom_quat = torch.tensor(
+        primitive.geom_quat,
+        device=points.device,
+        dtype=points.dtype,
+      ).expand(points.shape[0], self._pool_size, -1)
+      self._points_local[env_ids[mask]] = quat_apply(geom_quat, points)
 
   def _draw_sample_ids(
     self,
