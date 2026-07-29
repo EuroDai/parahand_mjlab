@@ -24,6 +24,8 @@ Added
   using debug spheres. Training configurations do not register the visualizer.
 - Added per-fingertip metrics for the ParaHand grasp tasks that log the final
   object-contact force magnitude of each episode.
+- Added ``play --curriculum-stage`` to force ParaHand grasp evaluation to use a
+  specific curriculum lesson without restarting the online promotion history.
 
 Changed
 ^^^^^^^
@@ -49,17 +51,19 @@ Changed
   control target, while tendon actions compute one target per policy step. Both hold
   their targets across all simulation substeps instead of recomputing them relative
   to the latest state at every simulation substep.
-- The ParaHand grasp task now uses three lessons. It starts with a single nominal
-  cube at a randomized position with a fixed yaw and target. Every lesson resets
-  controllable robot joints with noise around the XML home keyframe. Each environment
-  independently samples 64 surface points at reset and keeps those points for the
-  episode while updating their coordinates with the moving object. The second lesson
-  enables yaw, target, shape, and size randomization. It uses uniformly distributed
-  box, sphere, and capsule variants with sizes from 0.75 to 1.5 times nominal. The
-  final lesson additionally enables per-observation point-cloud resampling. Actor
-  and critic observations now include the object's base-frame orientation quaternion.
-  Each promotion requires an independent rolling final-pose success rate of 85%,
-  using the Isaac Dexsuite Lift criterion of less than 5 cm position error.
+- The ParaHand grasp task now uses three lessons. It starts with a nominal capsule
+  at a randomized position with a fixed yaw and target. Every lesson resets
+  controllable robot joints with noise around the XML home keyframe. The second
+  lesson enables yaw, target, shape, and continuous per-environment size randomization
+  over analytic box, sphere, and capsule geoms. Box half-extents vary independently
+  and never exceed the nominal 3 cm half-extents; sphere radius and capsule radius
+  and half-length vary continuously from 0.75 to 1.0 times nominal. Point clouds
+  are sampled analytically for primitives and from mesh triangles for future mesh
+  datasets such as YCB. The final lesson additionally enables per-observation
+  point-cloud resampling. Actor and critic observations retain their previous
+  shapes for checkpoint compatibility. Each promotion requires an independent
+  rolling final-pose success rate of 85%, using the Isaac Dexsuite Lift criterion
+  of less than 5 cm position error.
 - The standalone ParaHand PPO configuration now uses a fixed 0.0003 learning rate
   and the same scalar-standard-deviation Gaussian action distribution as the
   FR3-mounted task. Its palm translation axes now make the x and y actuator names
