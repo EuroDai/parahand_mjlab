@@ -26,6 +26,36 @@ Added
   object-contact force magnitude of each episode.
 - Added ``play --curriculum-stage`` to force ParaHand grasp evaluation to use a
   specific curriculum lesson without restarting the online promotion history.
+  Stage 2 playback constructs the configured DFCData or RobustDexGrasp mesh
+  environment instead of trying to apply a primitive reset stage.
+- Added a project-level ParaHand rollout tool that collects complete batched
+  episodes, indexes them by individual termination reason, and replays selected
+  trajectories interactively in Viser without rerunning the policy.
+- Added a RobustDexGrasp preprocessing tool that converts the dataset's movable
+  top meshes into centered and hand-scaled MuJoCo assets with deterministic
+  1024-point surface clouds, VHACD convex collision parts, explicit mass and
+  inertia, per-object metadata, and directly loadable single-free-body XML files.
+- Added a resumable DFCData preprocessing tool with a progress bar. It
+  deduplicates and reports exact duplicate cfg entries while strictly parsing
+  the UniDexGrasp cfg fragments without collapsing repeated object scales,
+  builds one flat scale-independent unit-sphere object pool, retains existing
+  CoACD collision parts, samples fixed 1024-point unit clouds, and records the
+  ordered train and seen/unseen test object-scale entries in one manifest.
+- Added periodic ParaHand evaluation on the processed DFCData unseen split.
+  Starting at curriculum Stage 2, every 300 PPO updates rank zero runs one
+  deterministic episode per object-scale variant, keeps these rollouts out of
+  PPO, and logs only ``eval/unseen_success_rate``.
+- Added a runner-managed ParaHand dataset stage that trains on either the DFCData train
+  split or all processed RobustDexGrasp objects. DFC assets are loaded in
+  deterministic rank-disjoint shards and rotated periodically. Dataset objects
+  reset with random XY and SO(3) orientation and are released above their oriented
+  support plane. Complete PPO updates alternate between the dataset environment
+  and the fully randomized analytic Stage 5 environment, with 25% primitive
+  rehearsal by default.
+- Added a per-environment analytic tabletop for ParaHand grasp training. Its
+  0.8 m square surface randomizes from 0.6 to 1.0 m at reset. The standalone hand
+  starts 0.2--0.4 m above the surface, primitive objects rest on it, and dataset
+  objects release 0.10--0.15 m above it using their oriented point-cloud support.
 
 Changed
 ^^^^^^^
@@ -45,25 +75,48 @@ Changed
 - ParaHand grasp contact rewards now use a smooth thumb-plus-one-finger force
   score around the 0.5 threshold instead of a hard Boolean gate. The smooth score
   gates contact and position-tracking rewards; success remains position-only.
+- ParaHand grasp actor and critic observations now retain each fingertip contact
+  force's signed x, y, and z components in the robot base frame instead of reducing
+  each force to its magnitude. Per-episode contact metrics remain scalar magnitudes.
+- ParaHand grasp actor and critic observations now include the signed 3D vector
+  from the palm center to the object center in robot-base axes. Target heights and
+  vertical object bounds are tabletop-relative; lateral bounds match the tabletop,
+  and the lower bound is 5 cm below its surface.
 - ParaHand grasp rewards now include reset-relative vertical lift progress, normalized
   by the current target height and gated by the smooth contact score.
 - ParaHand relative joint actions now accumulate each policy delta from the previous
   control target, while tendon actions compute one target per policy step. Both hold
   their targets across all simulation substeps instead of recomputing them relative
   to the latest state at every simulation substep.
-- The ParaHand grasp task now uses three lessons. It starts with a nominal capsule
-  at a randomized position with a fixed yaw and target. Every lesson resets
-  controllable robot joints with noise around the XML home keyframe. The second
-  lesson enables yaw, target, shape, and continuous per-environment size randomization
-  over analytic box, sphere, and capsule geoms. Box half-extents vary independently
-  and never exceed the nominal 3 cm half-extents; sphere radius and capsule radius
-  and half-length vary continuously from 0.75 to 1.0 times nominal. Point clouds
-  are sampled analytically for primitives and from mesh triangles for future mesh
-  datasets such as YCB. The final lesson additionally enables per-observation
-  point-cloud resampling. Actor and critic observations retain their previous
-  shapes for checkpoint compatibility. Each promotion requires an independent
-  rolling final-pose success rate of 85%, using the Isaac Dexsuite Lift criterion
-  of less than 5 cm position error.
+- The ParaHand grasp curriculum now starts with a completely deterministic
+  nominal capsule, followed by a deterministic capsule/box/sphere lesson with
+  shape fixed by environment. Four primitive lessons then increase all reset
+  randomization to 10%, 25%, 50%, and 100% before promotion to the mesh dataset.
+  This progression covers table height, object size, position and shape-specific
+  orientation, target position, palm pose, active joints, tendon targets, and
+  their matching control targets. Capsule radius and half-length scale from 0.5
+  to 1.25 times nominal; box half-extents and sphere radius scale independently
+  from 0.5 to 1.0 times nominal. Tilted capsules randomize roll and use their
+  rotated support height when placed on the table. The two deterministic lessons
+  write primitive model constants only on initialization or stage transition;
+  randomized lessons cache all three primitive slots and refresh their dimensions
+  every 16, 8, 4, and 2 reset batches respectively. Object type, pose, table, and
+  robot state still randomize every episode; type switches restore cached MuJoCo
+  derived constants without running ``set_const``. Each scene uses
+  one fixed, uniformly distributed 256-point surface cloud; observations only
+  rotate and translate those points with the object. Dataset observations
+  deterministically retain 256 uniformly spaced samples from their preprocessed
+  1024-point clouds, while all 1024 points remain available for oriented support
+  calculations. Analytic primitives use deterministic surface sampling, while the
+  mesh path remains available for future datasets such as YCB. Point-cloud
+  observation noise is disabled. Actor and critic encode only the latest cloud
+  using a 64-128-256 PointNet in one 256-point chunk with max-and-mean pooling and
+  gradient checkpointing, retain five-frame histories for the remaining state, and
+  use 1024-1024-512-512 MLPs. This architecture requires training from scratch.
+  Promotion uses stage-specific rolling total final-pose success rates and the
+  Isaac Dexsuite Lift criterion of less than 5 cm error. Passing the fully
+  randomized primitive lesson promotes the runner to dataset Stage 6 while
+  retaining Stage 5 for primitive rehearsal.
 - The standalone ParaHand PPO configuration now uses a fixed 0.0003 learning rate
   and the same scalar-standard-deviation Gaussian action distribution as the
   FR3-mounted task. Its palm translation axes now make the x and y actuator names
