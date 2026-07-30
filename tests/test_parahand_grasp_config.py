@@ -207,7 +207,7 @@ def test_standalone_hand_and_table_share_randomized_base_height():
   assert joint_reset_cfg.params["palm_height_range"] == (0.2, 0.4)
 
 
-def test_play_curriculum_override_keeps_second_lesson_deterministic():
+def test_play_curriculum_override_keeps_full_target_randomization_at_stage_one():
   cfg = parahand_only_grasp_object_env_cfg(play=True)
 
   _apply_curriculum_stage_override(cfg, 1)
@@ -217,9 +217,9 @@ def test_play_curriculum_override_keeps_second_lesson_deterministic():
   command_cfg = cfg.commands["object_pose"]
   assert isinstance(command_cfg, LiftingCommandCfg)
   target_range = command_cfg.target_position_range
-  assert target_range.x == (0.0, 0.0)
-  assert target_range.y == (0.0, 0.0)
-  assert target_range.z == (0.45, 0.45)
+  assert target_range.x == (-0.1, 0.1)
+  assert target_range.y == (-0.1, 0.1)
+  assert target_range.z == (0.35, 0.55)
   assert cfg.events["reset_robot_joints"].params["position_range"] == (0.0, 0.0)
 
 
@@ -264,9 +264,15 @@ def test_play_curriculum_override_scales_all_robot_ranges(stage, fraction):
   assert tendon_cfg.reset_target_range == pytest.approx(
     (-0.05 * fraction, 0.05 * fraction)
   )
+  command_cfg = cfg.commands["object_pose"]
+  assert isinstance(command_cfg, LiftingCommandCfg)
+  target_range = command_cfg.target_position_range
+  assert target_range.x == (-0.1, 0.1)
+  assert target_range.y == (-0.1, 0.1)
+  assert target_range.z == (0.35, 0.55)
 
 
-def test_play_curriculum_override_keeps_first_lesson_target_fixed():
+def test_play_curriculum_override_keeps_full_target_randomization_at_stage_zero():
   cfg = parahand_only_grasp_object_env_cfg(play=True)
 
   _apply_curriculum_stage_override(cfg, 0)
@@ -274,9 +280,9 @@ def test_play_curriculum_override_keeps_first_lesson_target_fixed():
   command_cfg = cfg.commands["object_pose"]
   assert isinstance(command_cfg, LiftingCommandCfg)
   target_range = command_cfg.target_position_range
-  assert target_range.x == (0.0, 0.0)
-  assert target_range.y == (0.0, 0.0)
-  assert target_range.z == (0.45, 0.45)
+  assert target_range.x == (-0.1, 0.1)
+  assert target_range.y == (-0.1, 0.1)
+  assert target_range.z == (0.35, 0.55)
 
 
 def test_grasp_rewards_use_aligned_smooth_contact_gate():
@@ -359,9 +365,9 @@ def test_object_curriculum_promotes_at_isaac_final_success_threshold():
   )
   curriculum = cast(Any, object_lesson_curriculum)(cfg, env)
   target_range = command.cfg.target_position_range
-  assert target_range.x == (0.0, 0.0)
-  assert target_range.y == (0.0, 0.0)
-  assert target_range.z == (0.45, 0.45)
+  assert target_range.x == (-0.1, 0.1)
+  assert target_range.y == (-0.1, 0.1)
+  assert target_range.z == (0.35, 0.55)
 
   initial_state = curriculum(env, torch.arange(num_envs), **params)
   assert initial_state["completed_episodes"].item() == 0.0
@@ -375,9 +381,9 @@ def test_object_curriculum_promotes_at_isaac_final_success_threshold():
   assert state["stage"].item() == 1.0
   assert event_cfgs["reset_object_pose"].params["curriculum_stage"] == 1
   assert state["window_count"].item() == 0.0
-  assert target_range.x == (0.0, 0.0)
-  assert target_range.y == (0.0, 0.0)
-  assert target_range.z == (0.45, 0.45)
+  assert target_range.x == (-0.1, 0.1)
+  assert target_range.y == (-0.1, 0.1)
+  assert target_range.z == (0.35, 0.55)
 
   object_pos[:18, 0] = 0.049
   object_pos[18:, 0] = 0.051
@@ -387,10 +393,24 @@ def test_object_curriculum_promotes_at_isaac_final_success_threshold():
   assert state["completed_episodes"].item() == 2 * num_envs
   assert state["stage"].item() == 2.0
   assert event_cfgs["reset_object_pose"].params["curriculum_stage"] == 2
-  assert target_range.x == pytest.approx((-0.01, 0.01))
-  assert target_range.y == pytest.approx((-0.01, 0.01))
-  assert target_range.z == pytest.approx((0.44, 0.46))
+  assert target_range.x == (-0.1, 0.1)
+  assert target_range.y == (-0.1, 0.1)
+  assert target_range.z == (0.35, 0.55)
   assert state["window_count"].item() == 0
+
+
+def test_object_curriculum_success_rate_ignores_inactive_history_capacity():
+  curriculum = object.__new__(object_lesson_curriculum)
+  curriculum._success_history = torch.zeros(8, dtype=torch.bool)
+  curriculum._history_count = 0
+  curriculum._write_index = 0
+  curriculum._completed_episodes = 0
+  curriculum._window_size = 4
+
+  curriculum._append_successes(torch.tensor([True, True, True, False]))
+
+  assert curriculum._history_count == 4
+  assert curriculum._success_rate() == pytest.approx(0.75)
 
 
 def test_object_reset_samples_continuous_dimensions_bounded_by_defaults():

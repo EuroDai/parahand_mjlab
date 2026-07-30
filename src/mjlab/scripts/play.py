@@ -82,7 +82,6 @@ def _apply_curriculum_stage_override(env_cfg, stage: int) -> None:
     )
 
   event_name = curriculum_cfg.params["event_name"]
-  command_name = curriculum_cfg.params["command_name"]
   event_cfg = env_cfg.events[event_name]
   event_cfg.params["curriculum_stage"] = stage
   fraction = primitive_randomization_fraction(stage)
@@ -108,13 +107,6 @@ def _apply_curriculum_stage_override(env_cfg, stage: int) -> None:
     -0.05 * fraction,
     0.05 * fraction,
   )
-
-  target_range = env_cfg.commands[command_name].target_position_range
-  for axis in ("x", "y", "z"):
-    low, high = getattr(target_range, axis)
-    midpoint = (low + high) * 0.5
-    half_width = 0.5 * (high - low) * fraction
-    setattr(target_range, axis, (midpoint - half_width, midpoint + half_width))
 
   # The online curriculum initializes itself at stage 0. Remove it during play so
   # it cannot overwrite the explicit evaluation stage.

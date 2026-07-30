@@ -60,6 +60,10 @@ Added
 Changed
 ^^^^^^^
 
+- ParaHand target positions now use their full configured XYZ randomization
+  ranges in every primitive curriculum stage and in the dataset stage; the
+  curriculum still progressively expands object, table, robot, and control
+  randomization.
 - The first ParaHand object curriculum lesson now uses the nominal capsule instead
   of the nominal box.
 - ParaHand grasp policies now use a tanh-squashed Gaussian action distribution
@@ -136,6 +140,10 @@ Changed
 Fixed
 ^^^^^
 
+- Fixed ParaHand's primitive curriculum averaging a full maximum-capacity success
+  buffer instead of the active stage window. This understated full-window success
+  by 8x in Stage 0, 4x in Stages 1--2, and 2x in Stages 3--4, making early-stage
+  promotion impossible.
 - Fixed the standalone ParaHand demo cube not colliding with the four fingertips
   when opening ``hand_only.xml`` directly in MuJoCo Simulate.
 - Restored ONNX uploads and W&B run metadata for velocity and manipulation

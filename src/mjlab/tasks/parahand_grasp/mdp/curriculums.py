@@ -38,8 +38,6 @@ class object_lesson_curriculum:
       )
     self._command = command
     self._object: Entity = env.scene[cfg.params["object_name"]]
-    target_range = self._command.cfg.target_position_range
-    self._random_target_ranges = (target_range.x, target_range.y, target_range.z)
     tendon_action = env.action_manager.get_term(cfg.params["tendon_action_name"])
     if not isinstance(tendon_action.cfg, RelativeTendonLengthActionCfg):
       raise TypeError("The tendon curriculum requires RelativeTendonLengthActionCfg.")
@@ -194,12 +192,6 @@ class object_lesson_curriculum:
       0.05 * fraction,
     )
 
-    target_range = self._command.cfg.target_position_range
-    x_range, y_range, z_range = self._random_target_ranges
-    target_range.x = _scale_range_about_midpoint(x_range, fraction)
-    target_range.y = _scale_range_about_midpoint(y_range, fraction)
-    target_range.z = _scale_range_about_midpoint(z_range, fraction)
-
   def _append_successes(self, successes: torch.Tensor) -> None:
     successes = successes.flatten()
     num_values = len(successes)
@@ -207,7 +199,7 @@ class object_lesson_curriculum:
       return
     self._completed_episodes += num_values
     if num_values >= self._window_size:
-      self._success_history.copy_(successes[-self._window_size :])
+      self._success_history[: self._window_size].copy_(successes[-self._window_size :])
       self._history_count = self._window_size
       self._write_index = 0
       return
@@ -225,24 +217,13 @@ class object_lesson_curriculum:
   def _success_rate(self) -> float:
     if self._history_count == 0:
       return 0.0
-    if self._history_count < self._window_size:
-      history = self._success_history[: self._history_count]
-    else:
-      history = self._success_history
+    history = self._success_history[: self._history_count]
     return float(history.float().mean().item())
 
   def _stage_is_complete(self) -> bool:
     threshold = self._promotion_thresholds[self._stage]
     minimum = self._minimum_episodes[self._stage]
     return self._history_count >= minimum and self._success_rate() >= threshold
-
-
-def _scale_range_about_midpoint(
-  value_range: tuple[float, float], fraction: float
-) -> tuple[float, float]:
-  midpoint = 0.5 * (value_range[0] + value_range[1])
-  half_width = 0.5 * (value_range[1] - value_range[0]) * fraction
-  return midpoint - half_width, midpoint + half_width
 
 
 def _stage_values(value, count: int, cast_type):

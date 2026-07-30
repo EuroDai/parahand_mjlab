@@ -28,7 +28,7 @@ _VISER_PORT_OVERRIDE=18701 \
 uv run play Mjlab-Grasp-Object-ParaHand-Only \
   --viewer viser \
   --device cuda:1 \
-  --num-envs 40 \
+  --num-envs 100 \
   --episode-length-s 20 \
   --checkpoint-file "$CHECKPOINT_FILE" \
   --curriculum-stage 0

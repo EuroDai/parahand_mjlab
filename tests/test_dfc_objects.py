@@ -14,6 +14,7 @@ import trimesh
 
 from mjlab.entity import VariantEntityCfg
 from mjlab.scripts.play import _make_stage2_play_env_cfg
+from mjlab.tasks.manipulation.mdp.commands import LiftingCommandCfg
 from mjlab.tasks.parahand_grasp.config.parahand.env_cfgs import (
   parahand_only_grasp_object_env_cfg,
 )
@@ -232,6 +233,12 @@ def test_make_dataset_train_env_cfg_uses_random_drop_reset(dfc_dataset: Path):
   assert reset_cfg.params["clearance"] == 0.003
   assert reset_cfg.params["table_height_event_name"] == "reset_table_height"
   assert stage2_cfg.curriculum == {}
+  command_cfg = stage2_cfg.commands["object_pose"]
+  assert isinstance(command_cfg, LiftingCommandCfg)
+  target_range = command_cfg.target_position_range
+  assert target_range.x == (-0.1, 0.1)
+  assert target_range.y == (-0.1, 0.1)
+  assert target_range.z == (0.35, 0.55)
   assert stage2_cfg.scene.num_envs == training_cfg.scene.num_envs
   assert stage2_cfg.sim.nconmax == 256
   assert stage2_cfg.sim.njmax == 2048
