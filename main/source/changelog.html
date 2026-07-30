@@ -586,6 +586,10 @@ objects release 0.10–0.15 m above it using their oriented point-cloud support.
 <section id="changed">
 <h3>Changed<a class="headerlink" href="#changed" title="Link to this heading">#</a></h3>
 <ul class="simple">
+<li><p>ParaHand target positions now use their full configured XYZ randomization
+ranges in every primitive curriculum stage and in the dataset stage; the
+curriculum still progressively expands object, table, robot, and control
+randomization.</p></li>
 <li><p>The first ParaHand object curriculum lesson now uses the nominal capsule instead
 of the nominal box.</p></li>
 <li><p>ParaHand grasp policies now use a tanh-squashed Gaussian action distribution
@@ -663,6 +667,10 @@ reward terms can show them all. Defaults to 20, preserving previous behavior.
 <section id="fixed">
 <h3>Fixed<a class="headerlink" href="#fixed" title="Link to this heading">#</a></h3>
 <ul class="simple">
+<li><p>Fixed ParaHand’s primitive curriculum averaging a full maximum-capacity success
+buffer instead of the active stage window. This understated full-window success
+by 8x in Stage 0, 4x in Stages 1–2, and 2x in Stages 3–4, making early-stage
+promotion impossible.</p></li>
 <li><p>Fixed the standalone ParaHand demo cube not colliding with the four fingertips
 when opening <code class="docutils literal notranslate"><span class="pre">hand_only.xml</span></code> directly in MuJoCo Simulate.</p></li>
 <li><p>Restored ONNX uploads and W&amp;B run metadata for velocity and manipulation
