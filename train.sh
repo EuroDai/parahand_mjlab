@@ -4,4 +4,5 @@ uv run train Mjlab-Grasp-Object-ParaHand-Only \
   --agent.max-iterations 30000 \
   --agent.save-interval 300 \
   --agent.logger wandb \
-  --agent.wandb-project parahand
+  --agent.wandb-project parahand \
+  --agent.stage2-dataset robustdex

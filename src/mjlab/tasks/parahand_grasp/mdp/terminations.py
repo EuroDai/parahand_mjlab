@@ -6,38 +6,18 @@ import torch
 
 from mjlab.managers.termination_manager import TerminationTermCfg
 
+from ._table import get_table_heights
+
 if TYPE_CHECKING:
   from mjlab.envs import ManagerBasedRlEnv
 
 
 class object_out_of_bounds:
-  """Terminate when the object leaves its reset-relative workspace."""
+  """Terminate when the object leaves the tabletop-relative workspace."""
 
   def __init__(self, cfg: TerminationTermCfg, env: ManagerBasedRlEnv):
     object_name = cfg.params["object_name"]
     self._object = env.scene[object_name]
-    self._initial_position = torch.zeros(env.num_envs, 3, device=env.device)
-    self._lower = torch.tensor(
-      (
-        cfg.params["x_bounds"][0],
-        cfg.params["y_bounds"][0],
-        cfg.params["z_bounds"][0],
-      ),
-      device=env.device,
-    )
-    self._upper = torch.tensor(
-      (
-        cfg.params["x_bounds"][1],
-        cfg.params["y_bounds"][1],
-        cfg.params["z_bounds"][1],
-      ),
-      device=env.device,
-    )
-
-  def reset(self, env_ids: torch.Tensor | slice | None) -> None:
-    if env_ids is None:
-      env_ids = slice(None)
-    self._initial_position[env_ids] = self._object_position()[env_ids]
 
   def __call__(
     self,
@@ -45,12 +25,23 @@ class object_out_of_bounds:
     object_name: str,
     x_bounds: tuple[float, float],
     y_bounds: tuple[float, float],
-    z_bounds: tuple[float, float],
+    table_height_event_name: str,
+    z_lower_offset: float,
+    z_upper_offset: float,
   ) -> torch.Tensor:
-    del env, object_name
-    movement = self._object_position() - self._initial_position
-    del x_bounds, y_bounds, z_bounds
-    return ((movement < self._lower) | (movement > self._upper)).any(dim=-1)
+    del object_name
+    position = self._object_position() - env.scene.env_origins
+    table_heights = get_table_heights(env, table_height_event_name)
+    outside_xy = (
+      (position[:, 0] < x_bounds[0])
+      | (position[:, 0] > x_bounds[1])
+      | (position[:, 1] < y_bounds[0])
+      | (position[:, 1] > y_bounds[1])
+    )
+    outside_z = (position[:, 2] < table_heights + z_lower_offset) | (
+      position[:, 2] > table_heights + z_upper_offset
+    )
+    return outside_xy | outside_z
 
   def _object_position(self) -> torch.Tensor:
     q_adr = self._object.data.indexing.free_joint_q_adr

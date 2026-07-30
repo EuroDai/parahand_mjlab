@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import torch
 
@@ -163,6 +163,8 @@ class ParaHandRelativeJointPositionAction(_ClippedAction):
 
 @dataclass(kw_only=True)
 class RelativeTendonLengthActionCfg(_ClippedActionCfg):
+  reset_target_range: tuple[float, float] = (0.0, 0.0)
+
   def __post_init__(self) -> None:
     self.transmission_type = TransmissionType.TENDON
 
@@ -199,4 +201,10 @@ class RelativeTendonLengthAction(_ClippedAction):
       env_ids = slice(None)
     super().reset(env_ids)
     current_length = self._entity.data.tendon_len[:, self.target_ids]
-    self._ctrl_target[env_ids] = current_length[env_ids]
+    current = current_length[env_ids]
+    cfg = cast(RelativeTendonLengthActionCfg, self.cfg)
+    offset = torch.empty_like(current).uniform_(*cfg.reset_target_range)
+    self._ctrl_target[env_ids] = (current + offset).clamp(
+      self._ctrl_range[env_ids, :, 0],
+      self._ctrl_range[env_ids, :, 1],
+    )

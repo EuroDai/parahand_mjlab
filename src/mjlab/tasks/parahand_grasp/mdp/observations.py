@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import mujoco
+import numpy as np
 import torch
 
 from mjlab.entity import Entity
@@ -73,6 +75,23 @@ def object_position_b(
   return quat_apply(quat_inv(robot.data.root_link_quat_w), object_pos_rel_w)
 
 
+def object_to_palm_position_b(
+  env: ManagerBasedRlEnv,
+  object_name: str,
+  palm_site_cfg: SceneEntityCfg,
+  base_asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+  """Vector from the palm site to the object center in robot-base axes."""
+  obj: Entity = env.scene[object_name]
+  palm_asset: Entity = env.scene[palm_site_cfg.name]
+  base_asset: Entity = env.scene[base_asset_cfg.name]
+  palm_pos_w = palm_asset.data.site_pos_w[:, palm_site_cfg.site_ids]
+  if palm_pos_w.shape[1] != 1:
+    raise ValueError("object_to_palm_position_b requires exactly one palm site.")
+  difference_w = obj.data.root_link_pos_w - palm_pos_w[:, 0]
+  return quat_apply(quat_inv(base_asset.data.root_link_quat_w), difference_w)
+
+
 def object_quaternion_b(
   env: ManagerBasedRlEnv,
   object_name: str,
@@ -98,6 +117,24 @@ def target_position_b(
   robot: Entity = env.scene[asset_cfg.name]
   target_pos_rel_w = command.target_pos - robot.data.root_link_pos_w
   return quat_apply(quat_inv(robot.data.root_link_quat_w), target_pos_rel_w)
+
+
+def contact_force_b(
+  env: ManagerBasedRlEnv,
+  sensor_name: str,
+  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+  """Return signed net fingertip-contact forces in the robot base frame."""
+  sensor: ContactSensor = env.scene[sensor_name]
+  robot: Entity = env.scene[asset_cfg.name]
+  force_w = sensor.data.force
+  assert force_w is not None
+  num_fingertips = force_w.shape[1]
+  base_quat_w_inv = quat_inv(robot.data.root_link_quat_w)[:, None, :].expand(
+    -1, num_fingertips, -1
+  )
+  force_b = quat_apply(base_quat_w_inv, force_w)
+  return force_b.flatten(start_dim=1)
 
 
 def contact_force_magnitude(
@@ -142,15 +179,19 @@ def last_actions(
 
 
 class object_point_cloud_b:
-  """Sampled object surface points expressed in the robot base frame."""
+  """Fixed object surface points expressed in the robot base frame.
+
+  The local surface cloud is built once from the scene's initial object shape.
+  Subsequent observations apply only the object's rigid rotation and translation.
+  """
 
   def __init__(self, cfg: ObservationTermCfg, env: ManagerBasedRlEnv):
     self._pool_size = int(cfg.params.get("pool_size", 256))
-    self._sample_size = int(cfg.params.get("sample_size", 64))
-    if self._sample_size > self._pool_size:
+    self._sample_size = int(cfg.params.get("sample_size", 256))
+    if self._sample_size != self._pool_size:
       raise ValueError(
-        f"sample_size ({self._sample_size}) must not exceed "
-        f"pool_size ({self._pool_size})."
+        "Fixed point clouds require sample_size to equal pool_size, "
+        f"got sample_size={self._sample_size} and pool_size={self._pool_size}."
       )
 
     object_name = cfg.params.get("object_name")
@@ -160,7 +201,6 @@ class object_point_cloud_b:
     if not isinstance(curriculum_event_name, str):
       raise TypeError("object_point_cloud_b requires a 'curriculum_event_name'.")
     self._curriculum_event_cfg = env.event_manager.get_term_cfg(curriculum_event_name)
-    self._dynamic_sampling_stage = int(cfg.params.get("dynamic_sampling_stage", 2))
     self._cache_for_visualization = bool(
       cfg.params.get("cache_for_visualization", False)
     )
@@ -189,14 +229,37 @@ class object_point_cloud_b:
           "or VariantEntityCfg mesh assets."
         )
       self._variant_ids = variant_ids.to(device=env.device, dtype=torch.long)
-      point_pools = []
-      for variant_idx in range(len(metadata.variant_names)):
-        source_model = metadata.variant_source_specs[variant_idx].compile()
-        point_pools.append(
-          _sample_model_surface_points(source_model, self._pool_size, env.device)
+      point_paths = cfg.params.get("variant_point_cloud_paths")
+      point_scales = cfg.params.get("variant_point_cloud_scales")
+      if point_paths is None and point_scales is None:
+        point_pools = []
+        for variant_idx in range(len(metadata.variant_names)):
+          source_model = metadata.variant_source_specs[variant_idx].compile()
+          point_pools.append(
+            _sample_model_surface_points(source_model, self._pool_size, env.device)
+          )
+      elif point_paths is None or point_scales is None:
+        raise ValueError(
+          "variant_point_cloud_paths and variant_point_cloud_scales must be "
+          "provided together."
         )
+      else:
+        if len(point_paths) != len(metadata.variant_names) or len(point_scales) != len(
+          metadata.variant_names
+        ):
+          raise ValueError(
+            "Preprocessed point-cloud paths and scales must align with mesh variants."
+          )
+        point_pools = [
+          _load_preprocessed_point_cloud(
+            Path(path),
+            float(scale),
+            self._pool_size,
+            env.device,
+          )
+          for path, scale in zip(point_paths, point_scales, strict=True)
+        ]
       self._points_local = torch.stack(point_pools)
-    self._cached_sample_ids = self._draw_sample_ids(env.num_envs, env.device)
 
   def __call__(
     self,
@@ -204,21 +267,21 @@ class object_point_cloud_b:
     object_name: str,
     ref_asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
     pool_size: int = 256,
-    sample_size: int = 64,
+    sample_size: int = 256,
     flatten: bool = True,
     curriculum_event_name: str = "reset_object_pose",
-    dynamic_sampling_stage: int = 2,
     cache_for_visualization: bool = False,
+    variant_point_cloud_paths: tuple[str, ...] | None = None,
+    variant_point_cloud_scales: tuple[float, ...] | None = None,
   ) -> torch.Tensor:
-    del curriculum_event_name
+    del (
+      curriculum_event_name,
+      variant_point_cloud_paths,
+      variant_point_cloud_scales,
+    )
     if pool_size != self._pool_size or sample_size != self._sample_size:
       raise ValueError(
         "object_point_cloud_b pool_size and sample_size cannot change after "
-        "initialization."
-      )
-    if dynamic_sampling_stage != self._dynamic_sampling_stage:
-      raise ValueError(
-        "object_point_cloud_b dynamic_sampling_stage cannot change after "
         "initialization."
       )
     if cache_for_visualization != self._cache_for_visualization:
@@ -230,22 +293,10 @@ class object_point_cloud_b:
     obj: Entity = env.scene[object_name]
     ref_asset: Entity = env.scene[ref_asset_cfg.name]
 
-    curriculum_stage = int(self._curriculum_event_cfg.params["curriculum_stage"])
-    if curriculum_stage >= self._dynamic_sampling_stage:
-      if getattr(self, "_primitive_reset", None) is not None:
-        self._refresh_primitive_points(
-          torch.arange(env.num_envs, device=env.device, dtype=torch.long)
-        )
-      sample_ids = self._draw_sample_ids(env.num_envs, env.device)
-    else:
-      sample_ids = self._cached_sample_ids
-    point_pools = (
+    points_local = (
       self._points_local
       if self._variant_ids is None
       else self._points_local[self._variant_ids]
-    )
-    points_local = torch.gather(
-      point_pools, dim=1, index=sample_ids.unsqueeze(-1).expand(-1, -1, 3)
     )
 
     object_quat_w = obj.data.root_link_quat_w[:, None, :].expand(-1, sample_size, -1)
@@ -271,19 +322,13 @@ class object_point_cloud_b:
   def reset(self, env_ids: torch.Tensor | slice | None) -> None:
     if env_ids is None:
       env_ids = slice(None)
-    curriculum_stage = int(self._curriculum_event_cfg.params["curriculum_stage"])
-    if curriculum_stage < self._dynamic_sampling_stage:
-      if getattr(self, "_primitive_reset", None) is not None:
-        refresh_ids = torch.arange(
-          self._points_local.shape[0],
-          device=self._points_local.device,
-          dtype=torch.long,
-        )[env_ids]
-        self._refresh_primitive_points(refresh_ids)
-      num_envs = self._cached_sample_ids[env_ids].shape[0]
-      self._cached_sample_ids[env_ids] = self._draw_sample_ids(
-        num_envs, self._cached_sample_ids.device
-      )
+    if getattr(self, "_primitive_reset", None) is not None:
+      refresh_ids = torch.arange(
+        self._points_local.shape[0],
+        device=self._points_local.device,
+        dtype=torch.long,
+      )[env_ids]
+      self._refresh_primitive_points(refresh_ids)
 
   def _refresh_primitive_points(self, env_ids: torch.Tensor) -> None:
     primitive_reset = getattr(self, "_primitive_reset", None)
@@ -307,19 +352,6 @@ class object_point_cloud_b:
       ).expand(points.shape[0], self._pool_size, -1)
       self._points_local[env_ids[mask]] = quat_apply(geom_quat, points)
 
-  def _draw_sample_ids(
-    self,
-    num_envs: int,
-    device: str | torch.device,
-  ) -> torch.Tensor:
-    random_scores = torch.rand(
-      num_envs,
-      self._pool_size,
-      dtype=self._points_local.dtype,
-      device=device,
-    )
-    return random_scores.topk(self._sample_size, dim=1).indices
-
 
 def _sample_primitive_surface_points(
   geom_type: int,
@@ -336,6 +368,37 @@ def _sample_primitive_surface_points(
     return _sample_cylinder_surface_points(geom_sizes, num_points)
   geom_name = mujoco.mjtGeom(geom_type).name
   raise ValueError(f"Unsupported point-cloud geom type: {geom_name}")
+
+
+def _load_preprocessed_point_cloud(
+  path: Path,
+  scale: float,
+  num_points: int,
+  device: str,
+) -> torch.Tensor:
+  points = np.load(path, allow_pickle=False)
+  if points.ndim != 2 or points.shape[1] != 3 or len(points) < num_points:
+    raise ValueError(
+      f"Expected at least {num_points} preprocessed 3D points in {path}, "
+      f"got shape {points.shape}."
+    )
+  if not np.isfinite(points).all():
+    raise ValueError(f"Preprocessed point cloud contains non-finite values: {path}")
+  if len(points) > num_points:
+    # Preserve the coverage of the uniformly preprocessed source cloud without
+    # introducing per-frame or per-reset randomness.
+    indices = (
+      (np.arange(num_points, dtype=np.float64) + 0.5) * (len(points) / num_points)
+    ).astype(np.int64)
+    points = points[indices]
+  return (
+    torch.as_tensor(
+      points,
+      dtype=torch.float32,
+      device=device,
+    )
+    * scale
+  )
 
 
 def _sample_model_surface_points(
@@ -361,7 +424,10 @@ def _sample_model_surface_points(
   if not torch.isfinite(areas).all() or areas.sum() <= 0.0:
     raise ValueError("Object point-cloud source model has invalid surface area.")
 
-  geom_choices = torch.multinomial(areas, num_points, replacement=True)
+  geom_cdf = torch.cumsum(areas / areas.sum(), dim=0)
+  geom_choices = torch.searchsorted(
+    geom_cdf, _stratified_unit(num_points, device, areas.dtype)
+  ).clamp_max(len(geom_ids) - 1)
   points = torch.empty(num_points, 3, dtype=torch.float32, device=device)
   for choice, geom_id in enumerate(geom_ids):
     mask = geom_choices == choice
@@ -403,14 +469,17 @@ def _sample_geom_surface_points(
   geom_type = mujoco.mjtGeom(model.geom_type[geom_id])
   if geom_type == mujoco.mjtGeom.mjGEOM_MESH:
     vertices, faces, face_areas = _mesh_triangles(model, geom_id, device)
-    face_ids = torch.multinomial(face_areas, num_points, replacement=True)
+    face_cdf = torch.cumsum(face_areas / face_areas.sum(), dim=0)
+    unit = _stratified_unit(num_points, device, face_areas.dtype)
+    face_ids = torch.searchsorted(face_cdf, unit).clamp_max(len(face_areas) - 1)
     triangles = vertices[faces[face_ids]]
-    barycentric = torch.rand(num_points, 2, device=device)
-    sqrt_u = torch.sqrt(barycentric[:, :1])
+    sqrt_u = torch.sqrt(_quasi_unit(num_points, device, face_areas.dtype)[:, None])
+    point_ids = torch.arange(num_points, device=device, dtype=face_areas.dtype) + 0.5
+    barycentric_v = torch.remainder(point_ids * 0.7548776662466927, 1.0)[:, None]
     return (
       (1.0 - sqrt_u) * triangles[:, 0]
-      + sqrt_u * (1.0 - barycentric[:, 1:]) * triangles[:, 1]
-      + sqrt_u * barycentric[:, 1:] * triangles[:, 2]
+      + sqrt_u * (1.0 - barycentric_v) * triangles[:, 1]
+      + sqrt_u * barycentric_v * triangles[:, 2]
     )
 
   geom_sizes = torch.tensor(
@@ -461,7 +530,7 @@ def _sample_box_surface_points(
   num_points: int,
 ) -> torch.Tensor:
   num_envs = half_sizes.shape[0]
-  face_weights = torch.stack(
+  axis_weights = torch.stack(
     (
       half_sizes[:, 1] * half_sizes[:, 2],
       half_sizes[:, 0] * half_sizes[:, 2],
@@ -469,29 +538,79 @@ def _sample_box_surface_points(
     ),
     dim=-1,
   )
-  face_axes = torch.multinomial(face_weights, num_points, replacement=True)
-  points = (
-    torch.rand(num_envs, num_points, 3, device=half_sizes.device) * 2.0 - 1.0
-  ) * half_sizes[:, None, :]
-  face_signs = torch.where(
-    torch.rand(num_envs, num_points, device=half_sizes.device) < 0.5,
-    -1.0,
+  face_weights = axis_weights[:, :, None].expand(-1, -1, 2).reshape(num_envs, 6)
+  face_cdf = torch.cumsum(
+    face_weights / face_weights.sum(dim=-1, keepdim=True), dim=-1
+  )
+  unit = _stratified_unit(num_points, half_sizes.device, half_sizes.dtype)
+  face_ids = (unit[None, :, None] > face_cdf[:, None, :]).sum(dim=-1).clamp_max(5)
+  face_membership = torch.nn.functional.one_hot(face_ids, num_classes=6)
+  local_ids = (
+    torch.cumsum(face_membership, dim=1).gather(2, face_ids.unsqueeze(-1)).squeeze(-1)
+    - 1
+  )
+  face_counts = face_membership.sum(dim=1).gather(1, face_ids).clamp_min(1)
+  first_coord = (local_ids.to(half_sizes.dtype) + 0.5) / face_counts
+  second_coord = torch.remainder(
+    _radical_inverse_base2(local_ids, half_sizes.dtype) + 0.5 / face_counts,
     1.0,
   )
-  face_extents = torch.gather(half_sizes, dim=1, index=face_axes)
-  return points.scatter(
-    dim=2,
-    index=face_axes.unsqueeze(-1),
-    src=(face_signs * face_extents).unsqueeze(-1),
+  face_axes = torch.div(face_ids, 2, rounding_mode="floor")
+  face_signs = face_ids.remainder(2).to(half_sizes.dtype) * 2.0 - 1.0
+
+  points = torch.zeros(
+    num_envs,
+    num_points,
+    3,
+    device=half_sizes.device,
+    dtype=half_sizes.dtype,
   )
+  for axis in range(3):
+    first_tangent = (axis + 1) % 3
+    second_tangent = (axis + 2) % 3
+    mask = face_axes == axis
+    points[:, :, axis] = torch.where(
+      mask, face_signs * half_sizes[:, axis, None], points[:, :, axis]
+    )
+    points[:, :, first_tangent] = torch.where(
+      mask,
+      (first_coord * 2.0 - 1.0) * half_sizes[:, first_tangent, None],
+      points[:, :, first_tangent],
+    )
+    points[:, :, second_tangent] = torch.where(
+      mask,
+      (second_coord * 2.0 - 1.0) * half_sizes[:, second_tangent, None],
+      points[:, :, second_tangent],
+    )
+  return points
+
+
+def _radical_inverse_base2(
+  indices: torch.Tensor,
+  dtype: torch.dtype,
+) -> torch.Tensor:
+  """Return the base-two radical inverse used by a Hammersley point set."""
+  remaining = indices
+  result = torch.zeros_like(indices, dtype=dtype)
+  factor = 0.5
+  while torch.any(remaining > 0):
+    result += remaining.remainder(2).to(dtype) * factor
+    remaining = torch.div(remaining, 2, rounding_mode="floor")
+    factor *= 0.5
+  return result
 
 
 def _sample_sphere_surface_points(
   geom_sizes: torch.Tensor,
   num_points: int,
 ) -> torch.Tensor:
-  directions = torch.randn(geom_sizes.shape[0], num_points, 3, device=geom_sizes.device)
-  directions = directions / directions.norm(dim=-1, keepdim=True).clamp_min(1.0e-6)
+  unit = _stratified_unit(num_points, geom_sizes.device, geom_sizes.dtype)
+  z = 1.0 - 2.0 * unit
+  theta = _golden_angles(num_points, geom_sizes.device, geom_sizes.dtype)
+  radial = torch.sqrt((1.0 - z.square()).clamp_min(0.0))
+  directions = torch.stack(
+    (radial * torch.cos(theta), radial * torch.sin(theta), z), dim=-1
+  )
   return directions * geom_sizes[:, None, :1]
 
 
@@ -501,22 +620,25 @@ def _sample_capsule_surface_points(
 ) -> torch.Tensor:
   radius = geom_sizes[:, 0:1]
   half_length = geom_sizes[:, 1:2]
-  theta = torch.rand(geom_sizes.shape[0], num_points, device=geom_sizes.device) * (
-    2.0 * torch.pi
-  )
+  unit = _stratified_unit(num_points, geom_sizes.device, geom_sizes.dtype)
+  theta = _golden_angles(num_points, geom_sizes.device, geom_sizes.dtype)
   side_prob = half_length / (half_length + radius).clamp_min(1.0e-6)
-  on_side = torch.rand_like(theta) < side_prob
+  on_side = unit[None, :] < side_prob
 
   side_x = radius * torch.cos(theta)
   side_y = radius * torch.sin(theta)
-  side_z = (torch.rand_like(theta) * 2.0 - 1.0) * half_length
+  side_unit = (unit[None, :] / side_prob.clamp_min(1.0e-6)).clamp_max(1.0)
+  side_z = (side_unit * 2.0 - 1.0) * half_length
 
-  cap_z_unit = torch.rand_like(theta)
+  cap_unit = ((unit[None, :] - side_prob) / (1.0 - side_prob).clamp_min(1.0e-6)).clamp(
+    0.0, 1.0
+  )
+  cap_z_unit = 1.0 - 2.0 * cap_unit
   cap_radial = radius * torch.sqrt((1.0 - cap_z_unit.square()).clamp_min(0.0))
-  cap_sign = torch.where(torch.rand_like(theta) < 0.5, -1.0, 1.0)
+  cap_sign = torch.where(cap_z_unit < 0.0, -1.0, 1.0)
   cap_x = cap_radial * torch.cos(theta)
   cap_y = cap_radial * torch.sin(theta)
-  cap_z = cap_sign * (half_length + radius * cap_z_unit)
+  cap_z = cap_sign * half_length + radius * cap_z_unit
 
   return torch.stack(
     (
@@ -534,18 +656,21 @@ def _sample_cylinder_surface_points(
 ) -> torch.Tensor:
   radius = geom_sizes[:, 0:1]
   half_length = geom_sizes[:, 1:2]
-  theta = torch.rand(geom_sizes.shape[0], num_points, device=geom_sizes.device) * (
-    2.0 * torch.pi
-  )
+  unit = _stratified_unit(num_points, geom_sizes.device, geom_sizes.dtype)
+  theta = _golden_angles(num_points, geom_sizes.device, geom_sizes.dtype)
   side_prob = (2.0 * half_length) / (2.0 * half_length + radius).clamp_min(1.0e-6)
-  on_side = torch.rand_like(theta) < side_prob
+  on_side = unit[None, :] < side_prob
 
   side_x = radius * torch.cos(theta)
   side_y = radius * torch.sin(theta)
-  side_z = (torch.rand_like(theta) * 2.0 - 1.0) * half_length
+  side_unit = (unit[None, :] / side_prob.clamp_min(1.0e-6)).clamp_max(1.0)
+  side_z = (side_unit * 2.0 - 1.0) * half_length
 
-  cap_radial = radius * torch.sqrt(torch.rand_like(theta))
-  cap_sign = torch.where(torch.rand_like(theta) < 0.5, -1.0, 1.0)
+  cap_unit = ((unit[None, :] - side_prob) / (1.0 - side_prob).clamp_min(1.0e-6)).clamp(
+    0.0, 1.0
+  )
+  cap_radial = radius * torch.sqrt(torch.remainder(cap_unit * 2.0, 1.0))
+  cap_sign = torch.where(cap_unit < 0.5, -1.0, 1.0)
   cap_x = cap_radial * torch.cos(theta)
   cap_y = cap_radial * torch.sin(theta)
   cap_z = cap_sign * half_length
@@ -558,6 +683,32 @@ def _sample_cylinder_surface_points(
     ),
     dim=-1,
   )
+
+
+def _stratified_unit(
+  num_points: int,
+  device: str | torch.device,
+  dtype: torch.dtype,
+) -> torch.Tensor:
+  return (torch.arange(num_points, device=device, dtype=dtype) + 0.5) / num_points
+
+
+def _quasi_unit(
+  num_points: int,
+  device: str | torch.device,
+  dtype: torch.dtype,
+) -> torch.Tensor:
+  point_ids = torch.arange(num_points, device=device, dtype=dtype) + 0.5
+  return torch.remainder(point_ids * 0.6180339887498949, 1.0)
+
+
+def _golden_angles(
+  num_points: int,
+  device: str | torch.device,
+  dtype: torch.dtype,
+) -> torch.Tensor:
+  point_ids = torch.arange(num_points, device=device, dtype=dtype)
+  return point_ids * 2.399963229728653
 
 
 def camera_rgb(env: ManagerBasedRlEnv, sensor_name: str) -> torch.Tensor:

@@ -52,6 +52,35 @@ def get_object_spec() -> mujoco.MjSpec:
   return spec
 
 
+def get_table_spec() -> mujoco.MjSpec:
+  """Build the 0.8 m square analytic table used by all curriculum lessons."""
+  spec = mujoco.MjSpec()
+  body = spec.worldbody.add_body(name="table")
+  body.add_geom(
+    name="tabletop",
+    type=mujoco.mjtGeom.mjGEOM_BOX,
+    pos=(0.0, 0.0, -0.025),
+    size=(0.4, 0.4, 0.025),
+    rgba=(0.42, 0.30, 0.20, 1.0),
+    friction=(1.0, 0.1, 0.002),
+    condim=4,
+    solref=(0.02, 1.0),
+    solimp=(0.95, 0.99, 0.001, 0.5, 2.0),
+    contype=1,
+    conaffinity=2_359_296,
+  )
+  return spec
+
+
+def get_table_cfg() -> EntityCfg:
+  return EntityCfg(
+    spec_fn=get_table_spec,
+    # Keep the table out of the initial host-side contact solve. The first reset
+    # moves it to its sampled 0.6--1.0 m height before policy observations.
+    init_state=EntityCfg.InitialStateCfg(pos=(0.0, 0.0, 10.0)),
+  )
+
+
 def get_object_cfg(
   init_pos: tuple[float, float, float] = (-0.55, 0.0, 0.03),
 ) -> EntityCfg:
@@ -114,6 +143,7 @@ def parahand_grasp_object_env_cfg(
   cfg = make_grasp_object_env_cfg()
   cfg.scene.entities = {
     "robot": get_parahand_robot_cfg(),
+    "table": get_table_cfg(),
     "object": get_object_cfg(),
   }
   cfg.scene.num_envs = 1 if play else 4096
@@ -134,6 +164,7 @@ def parahand_only_grasp_object_env_cfg(
   cfg = make_grasp_object_env_cfg()
   cfg.scene.entities = {
     "robot": get_parahand_only_robot_cfg(),
+    "table": get_table_cfg(),
     "object": get_object_cfg(init_pos=(0.3, 0.1, 0.03)),
   }
   cfg.scene.num_envs = 1 if play else 4096
@@ -163,6 +194,27 @@ def parahand_only_grasp_object_env_cfg(
   reset_joints_cfg = cfg.events["reset_robot_joints"].params["asset_cfg"]
   reset_joints_cfg.joint_names = joint_actuator_names
   reset_joints_cfg.preserve_order = True
+  cfg.events["reset_robot_joints"].func = parahand_mdp.reset_joints_above_table
+  cfg.events["reset_robot_joints"].params.update(
+    {
+      "palm_height_joint_name": "palm_translation_z",
+      "palm_height_range": (0.2, 0.4),
+      "palm_joint_ranges": {
+        "palm_translation_x": (-0.1, 0.2),
+        "palm_translation_y": (-0.2, 0.2),
+        "palm_rotation_x": (-0.5, 0.5),
+        "palm_rotation_y": (-0.5, 0.5),
+        "palm_rotation_z": (-0.5, 0.5),
+      },
+    }
+  )
+  del cfg.events["reset_base"]
+  cfg.events["reset_table_height"].params.update(
+    {
+      "robot_name": "robot",
+      "robot_base_follows_table": True,
+    }
+  )
   cfg.events["reset_object_pose"].params["position_center"] = (0, 0)
 
   command_cfg = cfg.commands["object_pose"]

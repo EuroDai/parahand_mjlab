@@ -5,7 +5,20 @@ from dataclasses import dataclass
 import mujoco
 
 FIRST_LESSON_OBJECT_NAME = "object_capsule"
-OBJECT_SCALE_RANGE = (0.75, 1.0)
+PRIMITIVE_DATASET_STAGE = 6
+PRIMITIVE_RANDOMIZATION_FRACTIONS = (0.0, 0.0, 0.1, 0.25, 0.5, 1.0)
+CAPSULE_SCALE_RANGE = (0.5, 1.25)
+BOX_SPHERE_SCALE_RANGE = (0.5, 1.0)
+# Backward-compatible aggregate range for downstream imports.
+OBJECT_SCALE_RANGE = BOX_SPHERE_SCALE_RANGE
+
+
+def primitive_randomization_fraction(stage: int) -> float:
+  if not 0 <= stage < PRIMITIVE_DATASET_STAGE:
+    raise ValueError(
+      f"Primitive curriculum stage must be in [0, {PRIMITIVE_DATASET_STAGE - 1}]."
+    )
+  return PRIMITIVE_RANDOMIZATION_FRACTIONS[stage]
 
 
 @dataclass(frozen=True)

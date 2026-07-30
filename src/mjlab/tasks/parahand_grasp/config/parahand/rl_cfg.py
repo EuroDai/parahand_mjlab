@@ -1,18 +1,23 @@
-from mjlab.rl import RslRlModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoAlgorithmCfg
+from mjlab.rl import RslRlModelCfg, RslRlPpoAlgorithmCfg
+from mjlab.tasks.parahand_grasp.rl import ParaHandOnPolicyRunnerCfg
 
 
-def parahand_grasp_object_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
-  return RslRlOnPolicyRunnerCfg(
+def parahand_grasp_object_ppo_runner_cfg() -> ParaHandOnPolicyRunnerCfg:
+  return ParaHandOnPolicyRunnerCfg(
     actor=RslRlModelCfg(
       class_name="mjlab.rl.pointnet:PointNetModel",
-      hidden_dims=(512, 256, 256, 128),
+      hidden_dims=(1024, 1024, 512, 512),
       activation="swish",
       obs_normalization=True,
       pointnet_cfg={
         "point_cloud_offset": 6,
-        "point_cloud_points": 64,
+        "point_cloud_points": 256,
         "point_dim": 3,
-        "feature_dims": (32, 64, 128),
+        "feature_dims": (64, 128, 256),
+        "pooling": "max_mean",
+        "history_mode": "latest",
+        "chunk_size": 256,
+        "gradient_checkpointing": True,
       },
       distribution_cfg={
         "class_name": "mjlab.rl.distributions:TanhGaussianDistribution",
@@ -22,14 +27,18 @@ def parahand_grasp_object_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
     ),
     critic=RslRlModelCfg(
       class_name="mjlab.rl.pointnet:PointNetModel",
-      hidden_dims=(512, 256, 256, 128),
+      hidden_dims=(1024, 1024, 512, 512),
       activation="swish",
       obs_normalization=True,
       pointnet_cfg={
         "point_cloud_offset": 6,
-        "point_cloud_points": 64,
+        "point_cloud_points": 256,
         "point_dim": 3,
-        "feature_dims": (32, 64, 128),
+        "feature_dims": (64, 128, 256),
+        "pooling": "max_mean",
+        "history_mode": "latest",
+        "chunk_size": 256,
+        "gradient_checkpointing": True,
       },
     ),
     algorithm=RslRlPpoAlgorithmCfg(
@@ -59,7 +68,7 @@ def parahand_grasp_object_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   )
 
 
-def parahand_only_grasp_object_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+def parahand_only_grasp_object_ppo_runner_cfg() -> ParaHandOnPolicyRunnerCfg:
   cfg = parahand_grasp_object_ppo_runner_cfg()
   cfg.experiment_name = "parahand_only_grasp_object"
   cfg.algorithm.learning_rate = 1.0e-4

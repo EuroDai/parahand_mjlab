@@ -2,7 +2,7 @@ import torch
 from tensordict import TensorDict
 
 from mjlab.rl.distributions import TanhGaussianDistribution
-from mjlab.rl.pointnet import PointNetModel
+from mjlab.rl.pointnet import PointNetEncoder, PointNetModel
 
 
 def _make_model(
@@ -24,6 +24,10 @@ def _make_model(
       "point_cloud_offset": 6,
       "point_cloud_points": 64,
       "feature_dims": (32, 64, 128),
+      "pooling": "max_mean",
+      "history_mode": "latest",
+      "chunk_size": 16,
+      "gradient_checkpointing": True,
     },
   )
 
@@ -32,7 +36,7 @@ def test_pointnet_model_shapes():
   model = _make_model()
   obs = TensorDict({"actor": torch.randn(4, 5, 297)}, batch_size=[4])
 
-  assert model.get_latent(obs).shape == (4, 1165)
+  assert model.get_latent(obs).shape == (4, 781)
   assert model(obs).shape == (4, 22)
 
 
@@ -48,6 +52,38 @@ def test_pointnet_features_are_point_permutation_invariant():
   shuffled = TensorDict({"actor": shuffled_obs}, batch_size=[4])
 
   torch.testing.assert_close(model.get_latent(obs), model.get_latent(shuffled))
+
+
+def test_pointnet_latest_mode_ignores_older_point_cloud_frames():
+  model = _make_model()
+  frame_obs = torch.randn(4, 5, 297)
+  changed_obs = frame_obs.clone()
+  changed_obs[:, :-1, 6:198] = torch.randn_like(changed_obs[:, :-1, 6:198])
+
+  original = TensorDict({"actor": frame_obs}, batch_size=[4])
+  changed = TensorDict({"actor": changed_obs}, batch_size=[4])
+
+  torch.testing.assert_close(model.get_latent(original), model.get_latent(changed))
+
+
+def test_chunked_max_mean_pooling_matches_full_pointnet():
+  full = PointNetEncoder((16, 32), "swish", pooling="max_mean")
+  chunked = PointNetEncoder(
+    (16, 32),
+    "swish",
+    pooling="max_mean",
+    chunk_size=13,
+    gradient_checkpointing=True,
+  )
+  chunked.load_state_dict(full.state_dict())
+  points = torch.randn(3, 64, 3, requires_grad=True)
+
+  expected = full(points)
+  actual = chunked(points)
+
+  torch.testing.assert_close(actual, expected)
+  actual.sum().backward()
+  assert points.grad is not None
 
 
 def test_pointnet_supports_tanh_gaussian_distribution_and_export():

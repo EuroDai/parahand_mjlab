@@ -60,6 +60,22 @@ def test_episode_averages_and_reset(mock_env):
   assert manager._step_count[2] == 10
 
 
+def test_get_step_values_returns_per_environment_values(mock_env):
+  cfg = {
+    "term": MetricsTermCfg(
+      func=lambda env: torch.arange(env.num_envs, device=env.device).float(),
+      params={},
+    )
+  }
+  manager = MetricsManager(cfg, mock_env)
+
+  manager.compute()
+
+  assert torch.equal(manager.get_step_values("term"), torch.arange(4).float())
+  with pytest.raises(ValueError, match="not found"):
+    manager.get_step_values("missing")
+
+
 def test_early_termination_uses_per_env_step_count(mock_env):
   """Envs with different episode lengths get correct per-step averages."""
   step = [0]

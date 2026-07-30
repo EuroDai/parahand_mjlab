@@ -8,7 +8,43 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.tasks.parahand_grasp.config.parahand.env_cfgs import (
   parahand_only_grasp_object_env_cfg,
 )
-from mjlab.tasks.parahand_grasp.mdp.observations import contact_force_magnitude
+from mjlab.tasks.parahand_grasp.mdp.observations import (
+  contact_force_b,
+  contact_force_magnitude,
+)
+
+
+def test_contact_force_observation_preserves_xyz_in_robot_base_frame():
+  force_w = torch.zeros(2, 5, 3)
+  force_w[0, 0] = torch.tensor([1.0, 2.0, 3.0])
+  force_w[1, 2] = torch.tensor([4.0, 5.0, 6.0])
+  sensor = SimpleNamespace(data=SimpleNamespace(force=force_w))
+  robot = SimpleNamespace(
+    data=SimpleNamespace(
+      root_link_quat_w=torch.tensor(
+        [
+          [1.0, 0.0, 0.0, 0.0],
+          [0.0, 0.0, 0.0, 1.0],
+        ]
+      )
+    )
+  )
+  env = SimpleNamespace(
+    scene={
+      "fingertip_object_contact": sensor,
+      "robot": robot,
+    }
+  )
+
+  force_b = cast(Any, contact_force_b)(
+    env,
+    sensor_name="fingertip_object_contact",
+  )
+
+  expected = force_w.clone()
+  expected[1, :, :2] *= -1.0
+  assert force_b.shape == (2, 15)
+  torch.testing.assert_close(force_b, expected.flatten(start_dim=1))
 
 
 def test_contact_force_observation_selects_named_sensor_primary():
@@ -59,6 +95,9 @@ def test_parahand_registers_last_contact_force_for_each_fingertip():
   cfg = parahand_only_grasp_object_env_cfg()
   expected_fingertips = ("thumb", "index", "middle", "ring", "little")
 
+  contact_force_cfg = cfg.observations["actor"].terms["contact_force"]
+  assert contact_force_cfg.func is contact_force_b
+  assert contact_force_cfg.clip == (-20.0, 20.0)
   assert set(cfg.metrics) == {
     f"{fingertip}_contact_force_last" for fingertip in expected_fingertips
   }
@@ -79,7 +118,13 @@ def test_parahand_logs_last_fingertip_contact_force_on_episode_reset():
   cfg.episode_length_s = cfg.decimation * cfg.sim.mujoco.timestep
   env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
   try:
-    env.reset(seed=0)
+    obs, _ = env.reset(seed=0)
+    actor_obs = obs["actor"]
+    critic_obs = obs["critic"]
+    assert isinstance(actor_obs, torch.Tensor)
+    assert isinstance(critic_obs, torch.Tensor)
+    assert actor_obs.shape == (1, 5, 890)
+    assert critic_obs.shape == (1, 5, 890)
     action = torch.zeros(1, env.action_manager.total_action_dim)
     _, _, _, time_out, extras = env.step(action)
 

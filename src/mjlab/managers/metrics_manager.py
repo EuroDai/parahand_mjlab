@@ -102,6 +102,16 @@ class MetricsManager(ManagerBase):
   def active_terms(self) -> list[str]:
     return self._term_names
 
+  def get_step_values(self, term_name: str) -> torch.Tensor:
+    """Return the most recently computed per-environment values for a term."""
+    try:
+      term_index = self._term_names.index(term_name)
+    except ValueError as exc:
+      raise ValueError(
+        f"Metric term '{term_name}' not found. Available: {self._term_names}."
+      ) from exc
+    return self._step_values[:, term_index]
+
   # Methods.
 
   def reset(

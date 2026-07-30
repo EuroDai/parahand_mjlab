@@ -247,6 +247,22 @@ def success(
   return torch.square(1.0 - torch.tanh(distance / pos_std))
 
 
+def final_position_success(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  object_cfg: SceneEntityCfg,
+  threshold: float,
+) -> torch.Tensor:
+  """Return the binary final-pose success criterion used by the curriculum."""
+  obj: Entity = env.scene[object_cfg.name]
+  target_position = _target_position(env, command_name)
+  distance = torch.linalg.vector_norm(
+    obj.data.root_link_pos_w - target_position,
+    dim=-1,
+  )
+  return (distance < threshold).to(dtype=torch.float32)
+
+
 def _target_position(env: ManagerBasedRlEnv, command_name: str) -> torch.Tensor:
   command = env.command_manager.get_term(command_name)
   if not isinstance(command, LiftingCommand):

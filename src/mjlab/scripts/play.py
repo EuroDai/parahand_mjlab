@@ -14,6 +14,15 @@ import tyro
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.scripts._cli import maybe_print_top_level_help
+from mjlab.tasks.parahand_grasp.dfc_objects import (
+  load_training_variants,
+  make_dataset_train_env_cfg,
+  select_training_shard,
+)
+from mjlab.tasks.parahand_grasp.mdp.consts import (
+  PRIMITIVE_DATASET_STAGE,
+  primitive_randomization_fraction,
+)
 from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.tracking.mdp import MotionCommandCfg
 from mjlab.utils.os import get_wandb_checkpoint_path
@@ -61,8 +70,11 @@ class PlayConfig:
 
 
 def _apply_curriculum_stage_override(env_cfg, stage: int) -> None:
-  if stage not in (0, 1, 2):
-    raise ValueError(f"curriculum_stage must be 0, 1, or 2, got {stage}.")
+  if not 0 <= stage < PRIMITIVE_DATASET_STAGE:
+    raise ValueError(
+      f"curriculum_stage must be between 0 and {PRIMITIVE_DATASET_STAGE - 1}, "
+      f"got {stage}."
+    )
   curriculum_cfg = env_cfg.curriculum.get("object_lesson")
   if curriculum_cfg is None:
     raise ValueError(
@@ -73,18 +85,90 @@ def _apply_curriculum_stage_override(env_cfg, stage: int) -> None:
   command_name = curriculum_cfg.params["command_name"]
   event_cfg = env_cfg.events[event_name]
   event_cfg.params["curriculum_stage"] = stage
+  fraction = primitive_randomization_fraction(stage)
+  env_cfg.events[curriculum_cfg.params["table_event_name"]].params[
+    "curriculum_stage"
+  ] = stage
+  robot_event_cfg = env_cfg.events[curriculum_cfg.params["robot_event_name"]]
+  robot_event_cfg.params["curriculum_stage"] = stage
+  robot_event_cfg.params["position_range"] = (-0.5 * fraction, 0.5 * fraction)
+  if "palm_joint_ranges" in robot_event_cfg.params:
+    robot_event_cfg.params["palm_joint_ranges"] = {
+      "palm_translation_x": (-0.1 * fraction, 0.2 * fraction),
+      "palm_translation_y": (-0.2 * fraction, 0.2 * fraction),
+      "palm_rotation_x": (-0.5 * fraction, 0.5 * fraction),
+      "palm_rotation_y": (-0.5 * fraction, 0.5 * fraction),
+      "palm_rotation_z": (-0.5 * fraction, 0.5 * fraction),
+    }
+    robot_event_cfg.params["palm_height_range"] = (
+      0.3 - 0.1 * fraction,
+      0.3 + 0.1 * fraction,
+    )
+  env_cfg.actions[curriculum_cfg.params["tendon_action_name"]].reset_target_range = (
+    -0.05 * fraction,
+    0.05 * fraction,
+  )
 
-  if stage == 0:
-    target_range = env_cfg.commands[command_name].target_position_range
-    for axis in ("x", "y", "z"):
-      low, high = getattr(target_range, axis)
-      midpoint = (low + high) * 0.5
-      setattr(target_range, axis, (midpoint, midpoint))
+  target_range = env_cfg.commands[command_name].target_position_range
+  for axis in ("x", "y", "z"):
+    low, high = getattr(target_range, axis)
+    midpoint = (low + high) * 0.5
+    half_width = 0.5 * (high - low) * fraction
+    setattr(target_range, axis, (midpoint - half_width, midpoint + half_width))
 
   # The online curriculum initializes itself at stage 0. Remove it during play so
   # it cannot overwrite the explicit evaluation stage.
   env_cfg.curriculum = {}
   print(f"[INFO]: Curriculum stage forced to {stage}")
+
+
+def _make_stage2_play_env_cfg(env_cfg, agent_cfg, num_envs: int | None):
+  """Build the configured ParaHand dataset environment for Stage 2 playback."""
+  if not getattr(agent_cfg, "stage2_enabled", False):
+    raise ValueError(
+      f"--curriculum-stage {PRIMITIVE_DATASET_STAGE} requires stage2_enabled=True."
+    )
+
+  dataset = str(agent_cfg.stage2_dataset).lower()
+  if dataset == "dfc":
+    dataset_dir = agent_cfg.stage2_dfc_dataset_dir
+    split = agent_cfg.stage2_dfc_split
+  elif dataset == "robustdex":
+    dataset_dir = agent_cfg.stage2_robustdex_dataset_dir
+    split = "all"
+  else:
+    raise ValueError(
+      f"Unsupported Stage 2 dataset '{dataset}'; expected 'dfc' or 'robustdex'."
+    )
+
+  catalog = load_training_variants(dataset, dataset_dir, split)
+  requested_envs = num_envs if num_envs is not None else env_cfg.scene.num_envs
+  shard_size = min(
+    len(catalog),
+    int(agent_cfg.stage2_shard_size_per_rank),
+    max(1, int(requested_envs)),
+  )
+  variants = select_training_shard(
+    catalog,
+    shard_size_per_rank=shard_size,
+    rank=0,
+    world_size=1,
+    shard_index=0,
+    seed=int(agent_cfg.stage2_shard_seed),
+  )
+  stage2_cfg = make_dataset_train_env_cfg(
+    env_cfg,
+    variants,
+    drop_height_range=tuple(agent_cfg.stage2_drop_height_range),
+    position_noise=tuple(agent_cfg.stage2_position_noise),
+    clearance=float(agent_cfg.stage2_floor_clearance),
+  )
+  stage2_cfg.scene.num_envs = int(requested_envs)
+  print(
+    f"[INFO]: Curriculum stage forced to {PRIMITIVE_DATASET_STAGE} "
+    f"({len(variants)} {dataset} variants for {requested_envs} environments)"
+  )
+  return stage2_cfg
 
 
 def run_play(task_id: str, cfg: PlayConfig):
@@ -96,7 +180,10 @@ def run_play(task_id: str, cfg: PlayConfig):
   agent_cfg = load_rl_cfg(task_id)
 
   if cfg.curriculum_stage is not None:
-    _apply_curriculum_stage_override(env_cfg, cfg.curriculum_stage)
+    if cfg.curriculum_stage == PRIMITIVE_DATASET_STAGE:
+      env_cfg = _make_stage2_play_env_cfg(env_cfg, agent_cfg, cfg.num_envs)
+    else:
+      _apply_curriculum_stage_override(env_cfg, cfg.curriculum_stage)
 
   DUMMY_MODE = cfg.agent in {"zero", "random"}
   TRAINED_MODE = not DUMMY_MODE

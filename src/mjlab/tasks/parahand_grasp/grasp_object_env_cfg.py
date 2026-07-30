@@ -13,8 +13,10 @@ from mjlab.managers.termination_manager import TerminationTermCfg
 from mjlab.scene import SceneCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.sim import MujocoCfg, SimulationCfg
-from mjlab.tasks.manipulation.mdp import LiftingCommandCfg as ObjectPoseCommandCfg
 from mjlab.tasks.parahand_grasp import mdp as parahand_mdp
+from mjlab.tasks.parahand_grasp.mdp.commands import (
+  TableRelativeLiftingCommandCfg as ObjectPoseCommandCfg,
+)
 from mjlab.tasks.velocity import mdp
 from mjlab.terrains import TerrainEntityCfg
 from mjlab.utils.nan_guard import NanGuardCfg
@@ -63,6 +65,7 @@ _HAND_ACTION_SCALE = 0.03
 _TENDON_ACTION_SCALE = 0.005
 _CONTACT_THRESHOLD = 0.5
 _CONTACT_TEMPERATURE = 0.1
+_TABLE_HEIGHT_EVENT_NAME = "reset_table_height"
 
 
 def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
@@ -85,10 +88,20 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
       params={
         "object_name": "object",
         "pool_size": 256,
-        "sample_size": 64,
+        "sample_size": 256,
         "flatten": True,
         "curriculum_event_name": "reset_object_pose",
-        "dynamic_sampling_stage": 2,
+      },
+      clip=(-2.0, 2.0),
+    ),
+    "object_to_palm_position_b": ObservationTermCfg(
+      func=parahand_mdp.object_to_palm_position_b,
+      params={
+        "object_name": "object",
+        "palm_site_cfg": SceneEntityCfg(
+          "robot",
+          site_names=("inner_palm_5",),
+        ),
       },
       noise=Unoise(n_min=-0.003, n_max=0.003),
       clip=(-2.0, 2.0),
@@ -154,10 +167,10 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
       noise=Unoise(n_min=-0.002, n_max=0.002),
     ),
     "contact_force": ObservationTermCfg(
-      func=parahand_mdp.contact_force_magnitude,
+      func=parahand_mdp.contact_force_b,
       params={"sensor_name": _FINGERTIP_CONTACT_SENSOR_NAME},
       noise=Unoise(n_min=-0.1, n_max=0.1),
-      clip=(0.0, 20.0),
+      clip=(-20.0, 20.0),
     ),
     "tendon_state": ObservationTermCfg(
       func=parahand_mdp.tendon_length,
@@ -225,6 +238,17 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
   }
 
   events = {
+    "reset_table_height": EventTermCfg(
+      func=parahand_mdp.reset_table_height,
+      mode="reset",
+      params={
+        "table_name": "table",
+        "height_range": (0.6, 1.0),
+        "robot_name": None,
+        "robot_base_follows_table": False,
+        "curriculum_stage": 0,
+      },
+    ),
     # For positioning the base of the robot at env_origins.
     "reset_base": EventTermCfg(
       func=mdp.reset_root_state_uniform,
@@ -235,11 +259,12 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
       },
     ),
     "reset_robot_joints": EventTermCfg(
-      func=mdp.reset_joints_by_offset,
+      func=parahand_mdp.reset_joints_by_curriculum,
       mode="reset",
       params={
         "position_range": (-0.05, 0.05),
         "velocity_range": (0.0, 0.0),
+        "curriculum_stage": 0,
         "asset_cfg": SceneEntityCfg(
           "robot",
           joint_names=_ARM_ACTUATOR_NAMES + _HAND_ACTUATOR_NAMES,
@@ -254,8 +279,11 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
         "object_name": "object",
         "position_center": (0.0, 0.0),
         "position_noise": (0.1, 0.1),
-        "yaw_range": (-0.5 * math.pi, 0.5 * math.pi),
+        "capsule_roll_range": (-0.5, 0.5),
+        "box_yaw_range": (-0.5 * math.pi, 0.5 * math.pi),
         "curriculum_stage": 0,
+        "table_height_event_name": _TABLE_HEIGHT_EVENT_NAME,
+        "table_clearance": 0.003,
       },
     ),
   }
@@ -363,7 +391,9 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
         "object_name": "object",
         "x_bounds": (-0.4, 0.4),
         "y_bounds": (-0.4, 0.4),
-        "z_bounds": (-0.05, 2.0),
+        "table_height_event_name": _TABLE_HEIGHT_EVENT_NAME,
+        "z_lower_offset": -0.05,
+        "z_upper_offset": 2.0,
       },
     ),
     "abnormal_robot": TerminationTermCfg(
@@ -377,12 +407,15 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
       func=parahand_mdp.object_lesson_curriculum,
       params={
         "event_name": "reset_object_pose",
+        "table_event_name": "reset_table_height",
+        "robot_event_name": "reset_robot_joints",
         "command_name": "object_pose",
+        "tendon_action_name": "tendon_length",
         "object_name": "object",
-        "promotion_threshold": 0.85,
+        "promotion_threshold": (0.90, 0.85, 0.82, 0.78, 0.75, 0.70),
         "success_threshold": 0.05,
-        "success_window_size": 4096,
-        "min_completed_episodes": 1024,
+        "success_window_size": (4096, 8192, 8192, 16384, 16384, 32768),
+        "min_completed_episodes": (1024, 2048, 2048, 4096, 4096, 8192),
       },
     )
   }
@@ -411,8 +444,8 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
       azimuth=120.0,
     ),
     sim=SimulationCfg(
-      nconmax=100,
-      njmax=1200,
+      nconmax=256,
+      njmax=2048,
       nan_guard=NanGuardCfg(enabled=True),
       mujoco=MujocoCfg(
         timestep=0.005,

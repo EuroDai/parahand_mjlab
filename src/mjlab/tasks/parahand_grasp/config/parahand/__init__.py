@@ -1,4 +1,4 @@
-from mjlab.tasks.manipulation.rl import ManipulationOnPolicyRunner
+from mjlab.tasks.parahand_grasp.rl import ParaHandOnPolicyRunner
 from mjlab.tasks.registry import register_mjlab_task
 
 from .env_cfgs import (
@@ -15,7 +15,7 @@ register_mjlab_task(
   env_cfg=parahand_grasp_object_env_cfg(),
   play_env_cfg=parahand_grasp_object_env_cfg(play=True),
   rl_cfg=parahand_grasp_object_ppo_runner_cfg(),
-  runner_cls=ManipulationOnPolicyRunner,
+  runner_cls=ParaHandOnPolicyRunner,
 )
 
 register_mjlab_task(
@@ -23,5 +23,5 @@ register_mjlab_task(
   env_cfg=parahand_only_grasp_object_env_cfg(),
   play_env_cfg=parahand_only_grasp_object_env_cfg(play=True),
   rl_cfg=parahand_only_grasp_object_ppo_runner_cfg(),
-  runner_cls=ManipulationOnPolicyRunner,
+  runner_cls=ParaHandOnPolicyRunner,
 )
