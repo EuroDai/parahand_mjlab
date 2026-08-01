@@ -58,7 +58,7 @@
     <link rel="prev" title="Research" href="research.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Jul 30, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 01, 2026"/>
   </head>
   
   
@@ -586,6 +586,9 @@ objects release 0.10–0.15 m above it using their oriented point-cloud support.
 <section id="changed">
 <h3>Changed<a class="headerlink" href="#changed" title="Link to this heading">#</a></h3>
 <ul class="simple">
+<li><p>All ParaHand primitive curriculum stages now use a 4096-episode success window
+and permit promotion after 1024 completed episodes. Stage 0–5 promotion
+thresholds are now 85%, 80%, 75%, 72%, 72%, and 70%, respectively.</p></li>
 <li><p>ParaHand target positions now use their full configured XYZ randomization
 ranges in every primitive curriculum stage and in the dataset stage; the
 curriculum still progressively expands object, table, robot, and control
@@ -1689,7 +1692,7 @@ By The mjlab Developers
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Jul 30, 2026.
+  Last updated on Aug 01, 2026.
   <br/>
 </p>
   </div>
