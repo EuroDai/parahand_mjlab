@@ -412,10 +412,10 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
         "command_name": "object_pose",
         "tendon_action_name": "tendon_length",
         "object_name": "object",
-        "promotion_threshold": (0.90, 0.85, 0.82, 0.78, 0.75, 0.70),
+        "promotion_threshold": (0.85, 0.80, 0.75, 0.72, 0.72, 0.70),
         "success_threshold": 0.05,
-        "success_window_size": (4096, 8192, 8192, 16384, 16384, 32768),
-        "min_completed_episodes": (1024, 2048, 2048, 4096, 4096, 8192),
+        "success_window_size": 4096,
+        "min_completed_episodes": 1024,
       },
     )
   }

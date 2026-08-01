@@ -60,6 +60,9 @@ Added
 Changed
 ^^^^^^^
 
+- All ParaHand primitive curriculum stages now use a 4096-episode success window
+  and permit promotion after 1024 completed episodes. Stage 0--5 promotion
+  thresholds are now 85%, 80%, 75%, 72%, 72%, and 70%, respectively.
 - ParaHand target positions now use their full configured XYZ randomization
   ranges in every primitive curriculum stage and in the dataset stage; the
   curriculum still progressively expands object, table, robot, and control

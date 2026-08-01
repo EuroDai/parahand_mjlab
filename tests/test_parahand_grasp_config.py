@@ -169,30 +169,16 @@ def test_object_curriculum_uses_continuously_randomized_primitives():
   assert reset_joints_cfg.func.__name__ == "reset_joints_by_curriculum"
   assert reset_joints_cfg.params["position_range"] == (-0.05, 0.05)
   assert curriculum_cfg.params["promotion_threshold"] == (
-    0.90,
     0.85,
-    0.82,
-    0.78,
+    0.80,
     0.75,
+    0.72,
+    0.72,
     0.70,
   )
   assert curriculum_cfg.params["success_threshold"] == 0.05
-  assert curriculum_cfg.params["success_window_size"] == (
-    4096,
-    8192,
-    8192,
-    16384,
-    16384,
-    32768,
-  )
-  assert curriculum_cfg.params["min_completed_episodes"] == (
-    1024,
-    2048,
-    2048,
-    4096,
-    4096,
-    8192,
-  )
+  assert curriculum_cfg.params["success_window_size"] == 4096
+  assert curriculum_cfg.params["min_completed_episodes"] == 1024
 
 
 def test_standalone_hand_and_table_share_randomized_base_height():
