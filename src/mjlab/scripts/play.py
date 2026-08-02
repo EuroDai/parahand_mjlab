@@ -11,17 +11,19 @@ from typing import Literal
 import torch
 import tyro
 
+import mjlab
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.scripts._cli import maybe_print_top_level_help
 from mjlab.tasks.parahand_grasp.dfc_objects import (
+  apply_primitive_stage_randomization,
   load_training_variants,
   make_dataset_train_env_cfg,
+  make_dfc_eval_env_cfg,
   select_training_shard,
 )
 from mjlab.tasks.parahand_grasp.mdp.consts import (
   PRIMITIVE_DATASET_STAGE,
-  primitive_randomization_fraction,
 )
 from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.tracking.mdp import MotionCommandCfg
@@ -30,6 +32,10 @@ from mjlab.utils.torch import configure_torch_backends
 from mjlab.utils.wrappers import VideoRecorder
 from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
 from mjlab.viewer.viser.viewer import CheckpointManager, format_time_ago
+
+PLAY_TYRO_FLAGS = tuple(
+  marker for marker in mjlab.TYRO_FLAGS if marker is not tyro.conf.FlagConversionOff
+)
 
 
 def _parse_wandb_dt(value: str | datetime) -> datetime:
@@ -52,21 +58,23 @@ class PlayConfig:
   episode_length_s: float | None = None
   """Override the play episode duration in seconds."""
   device: str | None = None
-  video: bool = False
+  video: tyro.conf.FlagConversionOff[bool] = False
   video_length: int = 200
   video_height: int | None = None
   video_width: int | None = None
   camera: int | str | None = None
   viewer: Literal["auto", "native", "viser"] = "auto"
-  no_terminations: bool = False
+  no_terminations: tyro.conf.FlagConversionOff[bool] = False
   """Disable all termination conditions (useful for viewing motions with dummy agents)."""
   curriculum_stage: int | None = None
   """Force a curriculum stage for evaluation instead of advancing it online."""
+  unseen_test: tyro.conf.FlagCreatePairsOff[bool] = False
+  """Play the configured DFCData unseen evaluation split in the viewer."""
   log_root: str = "logs/rsl_rl"
   """Root directory under which experiment logs are written."""
 
   # Internal flag used by demo script.
-  _demo_mode: tyro.conf.Suppress[bool] = False
+  _demo_mode: tyro.conf.Suppress[tyro.conf.FlagConversionOff[bool]] = False
 
 
 def _apply_curriculum_stage_override(env_cfg, stage: int) -> None:
@@ -75,38 +83,7 @@ def _apply_curriculum_stage_override(env_cfg, stage: int) -> None:
       f"curriculum_stage must be between 0 and {PRIMITIVE_DATASET_STAGE - 1}, "
       f"got {stage}."
     )
-  curriculum_cfg = env_cfg.curriculum.get("object_lesson")
-  if curriculum_cfg is None:
-    raise ValueError(
-      "--curriculum-stage is only supported for tasks with an object_lesson curriculum."
-    )
-
-  event_name = curriculum_cfg.params["event_name"]
-  event_cfg = env_cfg.events[event_name]
-  event_cfg.params["curriculum_stage"] = stage
-  fraction = primitive_randomization_fraction(stage)
-  env_cfg.events[curriculum_cfg.params["table_event_name"]].params[
-    "curriculum_stage"
-  ] = stage
-  robot_event_cfg = env_cfg.events[curriculum_cfg.params["robot_event_name"]]
-  robot_event_cfg.params["curriculum_stage"] = stage
-  robot_event_cfg.params["position_range"] = (-0.5 * fraction, 0.5 * fraction)
-  if "palm_joint_ranges" in robot_event_cfg.params:
-    robot_event_cfg.params["palm_joint_ranges"] = {
-      "palm_translation_x": (-0.1 * fraction, 0.2 * fraction),
-      "palm_translation_y": (-0.2 * fraction, 0.2 * fraction),
-      "palm_rotation_x": (-0.5 * fraction, 0.5 * fraction),
-      "palm_rotation_y": (-0.5 * fraction, 0.5 * fraction),
-      "palm_rotation_z": (-0.5 * fraction, 0.5 * fraction),
-    }
-    robot_event_cfg.params["palm_height_range"] = (
-      0.3 - 0.1 * fraction,
-      0.3 + 0.1 * fraction,
-    )
-  env_cfg.actions[curriculum_cfg.params["tendon_action_name"]].reset_target_range = (
-    -0.05 * fraction,
-    0.05 * fraction,
-  )
+  apply_primitive_stage_randomization(env_cfg, stage)
 
   # The online curriculum initializes itself at stage 0. Remove it during play so
   # it cannot overwrite the explicit evaluation stage.
@@ -163,6 +140,38 @@ def _make_stage2_play_env_cfg(env_cfg, agent_cfg, num_envs: int | None):
   return stage2_cfg
 
 
+def _make_unseen_test_play_env_cfg(env_cfg, agent_cfg):
+  """Build the configured ParaHand unseen-evaluation environment for playback."""
+  required_fields = (
+    "unseen_eval_dataset_dir",
+    "unseen_eval_split",
+    "unseen_eval_seed",
+    "unseen_eval_success_threshold",
+  )
+  missing = [name for name in required_fields if not hasattr(agent_cfg, name)]
+  if missing:
+    raise ValueError(
+      "--unseen-test is only supported for tasks with ParaHand unseen-evaluation "
+      f"configuration; missing: {missing}."
+    )
+
+  eval_cfg = make_dfc_eval_env_cfg(
+    env_cfg,
+    dataset_dir=agent_cfg.unseen_eval_dataset_dir,
+    split=agent_cfg.unseen_eval_split,
+    success_threshold=float(agent_cfg.unseen_eval_success_threshold),
+    actor_only=False,
+    retain_debug_visualizers=True,
+  )
+  eval_cfg.seed = int(agent_cfg.unseen_eval_seed)
+  eval_cfg.commands["object_pose"].debug_vis = True
+  print(
+    f"[INFO]: Unseen test split '{agent_cfg.unseen_eval_split}' loaded "
+    f"({eval_cfg.scene.num_envs} object-scale variants)"
+  )
+  return eval_cfg
+
+
 def run_play(task_id: str, cfg: PlayConfig):
   configure_torch_backends()
 
@@ -171,7 +180,11 @@ def run_play(task_id: str, cfg: PlayConfig):
   env_cfg = load_env_cfg(task_id, play=True)
   agent_cfg = load_rl_cfg(task_id)
 
-  if cfg.curriculum_stage is not None:
+  if cfg.unseen_test and cfg.curriculum_stage is not None:
+    raise ValueError("--unseen-test cannot be combined with --curriculum-stage.")
+  if cfg.unseen_test:
+    env_cfg = _make_unseen_test_play_env_cfg(env_cfg, agent_cfg)
+  elif cfg.curriculum_stage is not None:
     if cfg.curriculum_stage == PRIMITIVE_DATASET_STAGE:
       env_cfg = _make_stage2_play_env_cfg(env_cfg, agent_cfg, cfg.num_envs)
     else:
@@ -270,6 +283,11 @@ def run_play(task_id: str, cfg: PlayConfig):
 
   if cfg.num_envs is not None:
     env_cfg.scene.num_envs = cfg.num_envs
+    if cfg.unseen_test:
+      print(
+        f"[WARN]: Unseen test limited to {cfg.num_envs} environments; "
+        "this is a visual sample, not the complete unseen evaluation."
+      )
   if cfg.episode_length_s is not None:
     if cfg.episode_length_s <= 0.0:
       raise ValueError("episode_length_s must be positive.")
@@ -318,7 +336,12 @@ def run_play(task_id: str, cfg: PlayConfig):
       policy = PolicyRandom()
   else:
     runner_cls = load_runner_cls(task_id) or MjlabOnPolicyRunner
-    runner = runner_cls(env, asdict(agent_cfg), device=device)
+    runner_cfg = asdict(agent_cfg)
+    if cfg.unseen_test:
+      # The viewer is already running the unseen environment; do not allocate the
+      # runner's separate training-time evaluator as well.
+      runner_cfg["unseen_eval"] = False
+    runner = runner_cls(env, runner_cfg, device=device)
     runner.load(
       str(resume_path), load_cfg={"actor": True}, strict=True, map_location=device
     )
@@ -437,7 +460,7 @@ def main():
     args=remaining_args,
     default=PlayConfig(),
     prog=sys.argv[0] + f" {chosen_task}",
-    config=mjlab.TYRO_FLAGS,
+    config=PLAY_TYRO_FLAGS,
   )
   del remaining_args, agent_cfg
 

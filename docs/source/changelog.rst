@@ -45,12 +45,15 @@ Added
   Starting at curriculum Stage 2, every 300 PPO updates rank zero runs one
   deterministic episode per object-scale variant, keeps these rollouts out of
   PPO, and logs only ``eval/unseen_success_rate``.
+- Added ``play --unseen-test`` for viewing the configured ParaHand DFCData
+  unseen split with the same reset conditions and success metric as training-time
+  evaluation, including the actor's sampled object point cloud.
 - Added a runner-managed ParaHand dataset stage that trains on either the DFCData train
   split or all processed RobustDexGrasp objects. DFC assets are loaded in
   deterministic rank-disjoint shards and rotated periodically. Dataset objects
   reset with random XY and SO(3) orientation and are released above their oriented
   support plane. Complete PPO updates alternate between the dataset environment
-  and the fully randomized analytic Stage 5 environment, with 25% primitive
+  and the fully randomized analytic Stage 7 environment, with 25% primitive
   rehearsal by default.
 - Added a per-environment analytic tabletop for ParaHand grasp training. Its
   0.8 m square surface randomizes from 0.6 to 1.0 m at reset. The standalone hand
@@ -61,14 +64,19 @@ Changed
 ^^^^^^^
 
 - All ParaHand primitive curriculum stages now use a 4096-episode success window
-  and permit promotion after 1024 completed episodes. Stage 0--5 promotion
-  thresholds are now 85%, 80%, 75%, 72%, 72%, and 70%, respectively.
+  and permit promotion after 1024 completed episodes. Stage 0--7 promotion
+  thresholds are now 85%, 85%, 80%, 80%, 75%, 72%, 72%, and 70%, respectively.
 - ParaHand target positions now use their full configured XYZ randomization
   ranges in every primitive curriculum stage and in the dataset stage; the
   curriculum still progressively expands object, table, robot, and control
   randomization.
-- The first ParaHand object curriculum lesson now uses the nominal capsule instead
-  of the nominal box.
+- ParaHand Stage 8 mesh training and unseen-object evaluation now inherit the
+  complete Stage 7 table, gravity, robot, tendon-target, and actor-observation
+  randomization. Mesh drop heights are measured vertically from each randomized
+  tabletop to the object's lowest point in its sampled orientation.
+- The ParaHand primitive curriculum now begins with a fixed-size nominal box at
+  zero gravity, then raises gravity to 0.2g and 0.5g before introducing reset
+  randomization and the other primitive shapes.
 - ParaHand grasp policies now use a tanh-squashed Gaussian action distribution
   with the original state-independent learnable standard deviation. Environment
   actions and deterministic outputs are bounded to ``[-1, 1]``, and PPO
@@ -95,20 +103,20 @@ Changed
   control target, while tendon actions compute one target per policy step. Both hold
   their targets across all simulation substeps instead of recomputing them relative
   to the latest state at every simulation substep.
-- The ParaHand grasp curriculum now starts with a completely deterministic
-  nominal capsule, followed by a deterministic capsule/box/sphere lesson with
-  shape fixed by environment. Four primitive lessons then increase all reset
-  randomization to 10%, 25%, 50%, and 100% before promotion to the mesh dataset.
+- The ParaHand grasp curriculum uses eight analytic lessons before the mesh
+  dataset. Stages 0--2 use one fixed-size nominal box at 0g, 0.2g, and 0.5g.
+  Stage 3 adds 10% reset and box-size randomization; Stage 4 adds randomized
+  capsule/box/sphere selection at the same 10% range. Stages 5--7 use 0.7g/25%,
+  1.0g/50%, and 1.0g/100% randomization.
   This progression covers table height, object size, position and shape-specific
-  orientation, target position, palm pose, active joints, tendon targets, and
+  orientation, palm pose, active joints, tendon targets, and
   their matching control targets. Capsule radius and half-length scale from 0.5
   to 1.25 times nominal; box half-extents and sphere radius scale independently
   from 0.5 to 1.0 times nominal. Tilted capsules randomize roll and use their
-  rotated support height when placed on the table. The two deterministic lessons
+  rotated support height when placed on the table. The three fixed-size lessons
   write primitive model constants only on initialization or stage transition;
-  randomized lessons cache all three primitive slots and refresh their dimensions
-  every 16, 8, 4, and 2 reset batches respectively. Object type, pose, table, and
-  robot state still randomize every episode; type switches restore cached MuJoCo
+  randomized lessons refresh dimensions every 16, 16, 8, 4, and 2 reset batches.
+  Stages 4--7 cache all three primitive slots; type switches restore cached MuJoCo
   derived constants without running ``set_const``. Each scene uses
   one fixed, uniformly distributed 256-point surface cloud; observations only
   rotate and translate those points with the object. Dataset observations
@@ -122,8 +130,8 @@ Changed
   use 1024-1024-512-512 MLPs. This architecture requires training from scratch.
   Promotion uses stage-specific rolling total final-pose success rates and the
   Isaac Dexsuite Lift criterion of less than 5 cm error. Passing the fully
-  randomized primitive lesson promotes the runner to dataset Stage 6 while
-  retaining Stage 5 for primitive rehearsal.
+  randomized primitive lesson promotes the runner to dataset Stage 8 while
+  retaining Stage 7 for primitive rehearsal.
 - The standalone ParaHand PPO configuration now uses a fixed 0.0003 learning rate
   and the same scalar-standard-deviation Gaussian action distribution as the
   FR3-mounted task. Its palm translation axes now make the x and y actuator names
@@ -143,6 +151,8 @@ Changed
 Fixed
 ^^^^^
 
+- Fixed comma-separated ParaHand-only geom contact parameters preventing MuJoCo
+  from parsing ``hand_only.xml`` and starting training.
 - Fixed ParaHand's primitive curriculum averaging a full maximum-capacity success
   buffer instead of the active stage window. This understated full-window success
   by 8x in Stage 0, 4x in Stages 1--2, and 2x in Stages 3--4, making early-stage

@@ -76,7 +76,7 @@ class ParaHandOnPolicyRunnerCfg(RslRlOnPolicyRunnerCfg):
   stage2_position_noise: tuple[float, float] = (0.08, 0.08)
   """Independent XY reset half-ranges for dataset objects."""
   stage2_drop_height_range: tuple[float, float] = (0.10, 0.15)
-  """Height above the oriented support plane used for random drops."""
+  """Vertical gap from the tabletop to the dropped object's lowest point."""
   stage2_floor_clearance: float = 0.003
   """Extra clearance above the floor before applying drop height."""
 

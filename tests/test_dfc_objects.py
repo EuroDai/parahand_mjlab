@@ -11,9 +11,15 @@ import numpy as np
 import pytest
 import torch
 import trimesh
+import tyro
 
 from mjlab.entity import VariantEntityCfg
-from mjlab.scripts.play import _make_stage2_play_env_cfg
+from mjlab.scripts.play import (
+  PLAY_TYRO_FLAGS,
+  PlayConfig,
+  _make_stage2_play_env_cfg,
+  _make_unseen_test_play_env_cfg,
+)
 from mjlab.tasks.manipulation.mdp.commands import LiftingCommandCfg
 from mjlab.tasks.parahand_grasp.config.parahand.env_cfgs import (
   parahand_only_grasp_object_env_cfg,
@@ -36,6 +42,23 @@ from mjlab.tasks.parahand_grasp.rl.runner import (
   ParaHandOnPolicyRunner,
   _fixed_eval_rng,
 )
+
+
+def _assert_stage_seven_randomization(cfg) -> None:
+  assert cfg.events["reset_gravity"].params["curriculum_stage"] == 7
+  assert cfg.events["reset_table_height"].params["curriculum_stage"] == 7
+  robot_cfg = cfg.events["reset_robot_joints"].params
+  assert robot_cfg["curriculum_stage"] == 7
+  assert robot_cfg["position_range"] == (-0.5, 0.5)
+  assert robot_cfg["palm_height_range"] == pytest.approx((0.2, 0.4))
+  assert robot_cfg["palm_joint_ranges"] == {
+    "palm_translation_x": (-0.1, 0.2),
+    "palm_translation_y": (-0.2, 0.2),
+    "palm_rotation_x": (-0.5, 0.5),
+    "palm_rotation_y": (-0.5, 0.5),
+    "palm_rotation_z": (-0.5, 0.5),
+  }
+  assert cfg.actions["tendon_length"].reset_target_range == (-0.05, 0.05)
 
 
 @pytest.fixture
@@ -202,7 +225,7 @@ def test_make_dfc_eval_env_cfg_is_eval_only(dfc_dataset: Path):
   assert isinstance(object_cfg, VariantEntityCfg)
   assert len(object_cfg.variants) == 2
   assert list(eval_cfg.observations) == ["actor"]
-  assert eval_cfg.observations["actor"].enable_corruption is False
+  assert eval_cfg.observations["actor"].enable_corruption is True
   assert eval_cfg.rewards == {}
   assert eval_cfg.curriculum == {}
   assert list(eval_cfg.metrics) == ["unseen_success"]
@@ -212,6 +235,28 @@ def test_make_dfc_eval_env_cfg_is_eval_only(dfc_dataset: Path):
   assert reset_cfg.func.__name__ == "reset_dropped_mesh_object_pose"
   assert reset_cfg.params["drop_height_range"] == (0.10, 0.15)
   assert reset_cfg.params["table_height_event_name"] == "reset_table_height"
+  _assert_stage_seven_randomization(eval_cfg)
+
+
+def test_make_dfc_eval_env_cfg_can_retain_critic_for_viewer(dfc_dataset: Path):
+  training_cfg = parahand_only_grasp_object_env_cfg()
+
+  eval_cfg = make_dfc_eval_env_cfg(
+    training_cfg,
+    dfc_dataset,
+    "test_set_unseen_cat",
+    0.05,
+    actor_only=False,
+  )
+
+  assert list(eval_cfg.observations) == ["actor", "critic"]
+  assert eval_cfg.rewards == {}
+  assert eval_cfg.observations["actor"].enable_corruption is True
+  assert eval_cfg.observations["critic"].enable_corruption is False
+  for group_cfg in eval_cfg.observations.values():
+    assert group_cfg.terms["object_point_cloud_b"].params[
+      "variant_point_cloud_scales"
+    ] == (0.06, 0.12)
 
 
 def test_make_dataset_train_env_cfg_uses_random_drop_reset(dfc_dataset: Path):
@@ -233,6 +278,7 @@ def test_make_dataset_train_env_cfg_uses_random_drop_reset(dfc_dataset: Path):
   assert reset_cfg.params["clearance"] == 0.003
   assert reset_cfg.params["table_height_event_name"] == "reset_table_height"
   assert stage2_cfg.curriculum == {}
+  _assert_stage_seven_randomization(stage2_cfg)
   command_cfg = stage2_cfg.commands["object_pose"]
   assert isinstance(command_cfg, LiftingCommandCfg)
   target_range = command_cfg.target_position_range
@@ -263,7 +309,37 @@ def test_play_stage_two_builds_configured_dataset_environment(dfc_dataset: Path)
   reset_cfg = stage2_cfg.events["reset_object_pose"]
   assert reset_cfg.func.__name__ == "reset_dropped_mesh_object_pose"
   assert reset_cfg.params["drop_height_range"] == (0.10, 0.15)
+  assert stage2_cfg.events["reset_gravity"].params["curriculum_stage"] == 7
   assert stage2_cfg.curriculum == {}
+  _assert_stage_seven_randomization(stage2_cfg)
+
+
+def test_play_unseen_test_builds_viewable_eval_environment(dfc_dataset: Path):
+  env_cfg = parahand_only_grasp_object_env_cfg(play=True)
+  agent_cfg = parahand_only_grasp_object_ppo_runner_cfg()
+  agent_cfg.unseen_eval_dataset_dir = str(dfc_dataset)
+
+  eval_cfg = _make_unseen_test_play_env_cfg(env_cfg, agent_cfg)
+
+  assert eval_cfg.scene.num_envs == 2
+  assert eval_cfg.seed == agent_cfg.unseen_eval_seed
+  assert list(eval_cfg.observations) == ["actor", "critic"]
+  assert eval_cfg.observations["actor"].enable_corruption is True
+  assert list(eval_cfg.rewards) == ["object_point_cloud_debug"]
+  assert eval_cfg.rewards["object_point_cloud_debug"].weight == 0.0
+  assert list(eval_cfg.metrics) == ["unseen_success"]
+  assert eval_cfg.commands["object_pose"].debug_vis is True
+  _assert_stage_seven_randomization(eval_cfg)
+
+
+def test_play_unseen_test_is_value_free_flag():
+  cfg = tyro.cli(
+    PlayConfig,
+    args=["--unseen-test"],
+    config=PLAY_TYRO_FLAGS,
+  )
+
+  assert cfg.unseen_test is True
 
 
 def test_fixed_eval_rng_restores_training_rng():

@@ -18,12 +18,61 @@ from mjlab.managers.event_manager import EventTermCfg
 from mjlab.managers.metrics_manager import MetricsTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.tasks.parahand_grasp import mdp as parahand_mdp
+from mjlab.tasks.parahand_grasp.mdp.actions import RelativeTendonLengthActionCfg
+from mjlab.tasks.parahand_grasp.mdp.consts import (
+  PRIMITIVE_DATASET_STAGE,
+  primitive_randomization_fraction,
+)
 
 _EXPECTED_FORMAT_VERSION = 1
 _EXPECTED_SCALE_MODE = "unit_sphere_runtime_cfg"
 _DENSITY = 500.0
 _ROBUSTDEX_DATASET = "robustdex"
 _DFC_DATASET = "dfc"
+
+
+def apply_primitive_stage_randomization(
+  cfg: ManagerBasedRlEnvCfg,
+  stage: int,
+) -> None:
+  """Apply one primitive stage's non-object randomization to an env config."""
+  if not 0 <= stage < PRIMITIVE_DATASET_STAGE:
+    raise ValueError(
+      f"Primitive randomization stage must be in "
+      f"[0, {PRIMITIVE_DATASET_STAGE - 1}], got {stage}."
+    )
+  curriculum_cfg = cfg.curriculum.get("object_lesson")
+  if curriculum_cfg is None:
+    raise ValueError("Primitive randomization requires an object_lesson curriculum.")
+
+  params = curriculum_cfg.params
+  cfg.events[params["event_name"]].params["curriculum_stage"] = stage
+  cfg.events[params["table_event_name"]].params["curriculum_stage"] = stage
+  cfg.events[params["gravity_event_name"]].params["curriculum_stage"] = stage
+
+  fraction = primitive_randomization_fraction(stage)
+  robot_event_cfg = cfg.events[params["robot_event_name"]]
+  robot_event_cfg.params["curriculum_stage"] = stage
+  robot_event_cfg.params["position_range"] = (-0.5 * fraction, 0.5 * fraction)
+  if "palm_joint_ranges" in robot_event_cfg.params:
+    robot_event_cfg.params["palm_joint_ranges"] = {
+      "palm_translation_x": (-0.1 * fraction, 0.2 * fraction),
+      "palm_translation_y": (-0.2 * fraction, 0.2 * fraction),
+      "palm_rotation_x": (-0.5 * fraction, 0.5 * fraction),
+      "palm_rotation_y": (-0.5 * fraction, 0.5 * fraction),
+      "palm_rotation_z": (-0.5 * fraction, 0.5 * fraction),
+    }
+    robot_event_cfg.params["palm_height_range"] = (
+      0.3 - 0.1 * fraction,
+      0.3 + 0.1 * fraction,
+    )
+  tendon_cfg = cfg.actions[params["tendon_action_name"]]
+  if not isinstance(tendon_cfg, RelativeTendonLengthActionCfg):
+    raise TypeError("Primitive randomization requires a relative tendon action.")
+  tendon_cfg.reset_target_range = (
+    -0.05 * fraction,
+    0.05 * fraction,
+  )
 
 
 @dataclass(frozen=True)
@@ -311,9 +360,13 @@ def make_dfc_eval_env_cfg(
   dataset_dir: str | Path,
   split: str,
   success_threshold: float,
+  *,
+  actor_only: bool = True,
+  retain_debug_visualizers: bool = False,
 ) -> ManagerBasedRlEnvCfg:
   """Create a deterministic-policy evaluation environment for one DFC split."""
   cfg = deepcopy(training_cfg)
+  apply_primitive_stage_randomization(cfg, PRIMITIVE_DATASET_STAGE - 1)
   variants = load_dfc_variants(dataset_dir, split)
   original_object_cfg = cfg.scene.entities["object"]
   cfg.scene.entities["object"] = make_dfc_object_cfg(
@@ -326,8 +379,10 @@ def make_dfc_eval_env_cfg(
   cfg.sim.nconmax = max(cfg.sim.nconmax or 0, 1024)
   cfg.sim.njmax = max(cfg.sim.njmax or 0, 4096)
   cfg.curriculum = {}
+  point_cloud_debug = cfg.rewards.get("object_point_cloud_debug")
   cfg.rewards = {}
-
+  if retain_debug_visualizers and point_cloud_debug is not None:
+    cfg.rewards["object_point_cloud_debug"] = point_cloud_debug
   original_reset_cfg = cfg.events["reset_object_pose"]
   cfg.events["reset_object_pose"] = EventTermCfg(
     func=parahand_mdp.reset_dropped_mesh_object_pose,
@@ -343,12 +398,12 @@ def make_dfc_eval_env_cfg(
     },
   )
 
-  actor_group = cfg.observations["actor"]
-  actor_group.enable_corruption = False
-  actor_group.terms["object_point_cloud_b"].params.update(
-    dfc_point_cloud_params(variants)
-  )
-  cfg.observations = {"actor": actor_group}
+  point_cloud_params = dfc_point_cloud_params(variants)
+  for group_cfg in cfg.observations.values():
+    group_cfg.terms["object_point_cloud_b"].params.update(point_cloud_params)
+  cfg.observations["actor"].enable_corruption = True
+  if actor_only:
+    cfg.observations = {"actor": cfg.observations["actor"]}
   cfg.metrics = {
     "unseen_success": MetricsTermCfg(
       func=parahand_mdp.final_position_success,
@@ -372,20 +427,21 @@ def make_dataset_train_env_cfg(
   position_noise: tuple[float, float],
   clearance: float,
 ) -> ManagerBasedRlEnvCfg:
-  """Create a Stage 2 environment for one fixed mesh shard."""
+  """Create a Stage 8 environment for one fixed mesh shard."""
   if drop_height_range[0] < 0.0 or drop_height_range[1] < drop_height_range[0]:
     raise ValueError("drop_height_range must be non-negative and ordered.")
   if clearance < 0.0:
     raise ValueError("clearance must be non-negative.")
 
   cfg = deepcopy(training_cfg)
+  apply_primitive_stage_randomization(cfg, PRIMITIVE_DATASET_STAGE - 1)
   original_object_cfg = cfg.scene.entities["object"]
   cfg.scene.entities["object"] = make_dfc_object_cfg(
     variants,
     init_pos=original_object_cfg.init_state.pos,
   )
   cfg.curriculum = {}
-  # Stage 2 keeps thousands of worlds resident, so use a smaller per-world
+  # Stage 8 keeps thousands of worlds resident, so use a smaller per-world
   # contact budget than the 78-world evaluator while retaining headroom for
   # decomposed collision parts touching the floor and hand simultaneously.
   cfg.sim.nconmax = max(cfg.sim.nconmax or 0, 256)

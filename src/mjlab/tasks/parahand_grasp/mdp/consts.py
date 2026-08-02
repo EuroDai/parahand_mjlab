@@ -4,9 +4,11 @@ from dataclasses import dataclass
 
 import mujoco
 
-FIRST_LESSON_OBJECT_NAME = "object_capsule"
-PRIMITIVE_DATASET_STAGE = 6
-PRIMITIVE_RANDOMIZATION_FRACTIONS = (0.0, 0.0, 0.1, 0.25, 0.5, 1.0)
+FIRST_LESSON_OBJECT_NAME = "object_box"
+PRIMITIVE_DATASET_STAGE = 8
+THREE_PRIMITIVE_STAGE = 4
+PRIMITIVE_RANDOMIZATION_FRACTIONS = (0.0, 0.0, 0.0, 0.1, 0.1, 0.25, 0.5, 1.0)
+PRIMITIVE_GRAVITY_FRACTIONS = (0.0, 0.2, 0.5, 0.5, 0.5, 0.7, 1.0, 1.0)
 CAPSULE_SCALE_RANGE = (0.5, 1.25)
 BOX_SPHERE_SCALE_RANGE = (0.5, 1.0)
 # Backward-compatible aggregate range for downstream imports.
@@ -21,6 +23,14 @@ def primitive_randomization_fraction(stage: int) -> float:
   return PRIMITIVE_RANDOMIZATION_FRACTIONS[stage]
 
 
+def primitive_gravity_fraction(stage: int) -> float:
+  if not 0 <= stage < PRIMITIVE_DATASET_STAGE:
+    raise ValueError(
+      f"Primitive curriculum stage must be in [0, {PRIMITIVE_DATASET_STAGE - 1}]."
+    )
+  return PRIMITIVE_GRAVITY_FRACTIONS[stage]
+
+
 @dataclass(frozen=True)
 class PrimitiveObject:
   name: str
@@ -33,7 +43,7 @@ class PrimitiveObject:
 
 PRIMITIVE_OBJECTS = (
   PrimitiveObject(
-    name=FIRST_LESSON_OBJECT_NAME,
+    name="object_capsule",
     geom_type=mujoco.mjtGeom.mjGEOM_CAPSULE,
     size=(0.02, 0.035, 0.0),
     geom_quat=(0.7071067811865476, -0.7071067811865475, 0.0, 0.0),
@@ -41,7 +51,7 @@ PRIMITIVE_OBJECTS = (
     floor_offset=0.02,
   ),
   PrimitiveObject(
-    name="object_box",
+    name=FIRST_LESSON_OBJECT_NAME,
     geom_type=mujoco.mjtGeom.mjGEOM_BOX,
     size=(0.03, 0.03, 0.03),
     geom_quat=(1.0, 0.0, 0.0, 0.0),

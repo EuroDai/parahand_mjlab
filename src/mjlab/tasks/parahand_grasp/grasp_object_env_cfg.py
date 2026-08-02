@@ -238,6 +238,14 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
   }
 
   events = {
+    "reset_gravity": EventTermCfg(
+      func=parahand_mdp.reset_gravity_by_curriculum,
+      mode="reset",
+      params={
+        "gravity": (0.0, 0.0, -9.81),
+        "curriculum_stage": 0,
+      },
+    ),
     "reset_table_height": EventTermCfg(
       func=parahand_mdp.reset_table_height,
       mode="reset",
@@ -409,10 +417,11 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
         "event_name": "reset_object_pose",
         "table_event_name": "reset_table_height",
         "robot_event_name": "reset_robot_joints",
+        "gravity_event_name": "reset_gravity",
         "command_name": "object_pose",
         "tendon_action_name": "tendon_length",
         "object_name": "object",
-        "promotion_threshold": (0.85, 0.80, 0.75, 0.72, 0.72, 0.70),
+        "promotion_threshold": (0.85, 0.85, 0.80, 0.80, 0.75, 0.72, 0.72, 0.70),
         "success_threshold": 0.05,
         "success_window_size": 4096,
         "min_completed_episodes": 1024,

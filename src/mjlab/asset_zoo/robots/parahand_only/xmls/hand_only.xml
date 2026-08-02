@@ -3,21 +3,21 @@
     <compiler angle="radian"/>
     <option integrator="implicitfast" gravity="0 0 -9.81"/>
     <default>
-        <geom condim="4" solref=".01 1" solimp=".99 .99 .001" contype="1" conaffinity="1"/>
+        <geom condim="4" friction="1.0 0.01 0.001" solref="0.01 1.0" solimp="0.9 0.95 0.001 0.5 2.0" contype="1" conaffinity="1"/>
         <default class="hand">
-            <geom type="mesh" density="1250" friction="1 0.05 0.0002" rgba="0 0 1 0"/>
+            <geom type="mesh" density="1250" rgba="0 0 1 0"/>
         </default>
         <default class="visual">
             <geom contype="0" conaffinity="0" group="2" density="1"/>
         </default>
         <default class="tip">
-            <geom zaxis="1 0 0" type="capsule" size="0.008 0.006" pos="0.022 0 0" rgba="1 1 .6 1" density="1000" friction="1 0.2 0.01"/>
+            <geom zaxis="1 0 0" type="capsule" size="0.008 0.006" pos="0.022 0 0" rgba="1 1 .6 1" density="1000"/>
         </default>
         <default class="tac">
             <geom zaxis="1 0 0" type="capsule" size="0.006 0.003" pos="0.026 0.006 0" rgba="0 1 0 0.3" density="1000" friction="1 0.2 0.01"/>
         </default>
         <default class="collision">
-            <geom density="1250" friction="1.0 0.1 0.001" rgba="0.7 0.3 0.3 0.5"/>
+            <geom density="1250" rgba="0.7 0.3 0.3 0.5"/>
             <default class="link_1_collision">
                 <geom type="box" pos="0.019235 0.00017 0" size="0.013545 0.00875 0.00599"/>
             </default>
@@ -29,7 +29,7 @@
             </default>
         </default>
         <default class="palm_collision">
-            <geom density="1500" friction="1.0 0.1 0.001" rgba="0.3 0.3 0.7 0.2"/>
+            <geom density="1500" rgba="0.3 0.3 0.7 0.2"/>
         </default>
         <default class="tendon">
             <tendon width="0.001" rgba="0 0 1 1"/>
@@ -65,7 +65,7 @@
             <position ctrllimited="true" inheritrange="1" kp="60" kv="4" forcerange="-80 80"/>
         </default>
         <default class="cube">
-            <geom friction="2.0 0.1 0.002" contype="2097152" conaffinity="2097151" condim="4" />
+            <geom friction="1.0 0.002 0.002" contype="2097152" conaffinity="2097151" condim="4" />
         </default>
     </default>
     <asset>

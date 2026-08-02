@@ -30,6 +30,9 @@ class object_lesson_curriculum:
     self._robot_event_cfg = env.event_manager.get_term_cfg(
       cfg.params["robot_event_name"]
     )
+    self._gravity_event_cfg = env.event_manager.get_term_cfg(
+      cfg.params["gravity_event_name"]
+    )
     command = env.command_manager.get_term(cfg.params["command_name"])
     if not isinstance(command, LiftingCommand):
       raise TypeError(
@@ -96,8 +99,8 @@ class object_lesson_curriculum:
     if stage < self._stage:
       raise ValueError("The object curriculum cannot move backwards.")
     self._stage = stage
-    # Stage 6 uses a separate mesh environment. Primitive rehearsal remains at
-    # the fully randomized Stage 5 settings.
+    # Stage 8 uses a separate mesh environment. Primitive rehearsal remains at
+    # the fully randomized Stage 7 settings.
     self._set_randomization_stage(min(stage, PRIMITIVE_DATASET_STAGE - 1))
     self._window_size = self._window_sizes[min(stage, PRIMITIVE_DATASET_STAGE - 1)]
     self._clear_success_history()
@@ -109,6 +112,7 @@ class object_lesson_curriculum:
     event_name: str,
     table_event_name: str,
     robot_event_name: str,
+    gravity_event_name: str,
     command_name: str,
     tendon_action_name: str,
     object_name: str,
@@ -121,6 +125,7 @@ class object_lesson_curriculum:
       event_name,
       table_event_name,
       robot_event_name,
+      gravity_event_name,
       command_name,
       tendon_action_name,
       object_name,
@@ -170,6 +175,7 @@ class object_lesson_curriculum:
       self._event_cfg,
       self._table_event_cfg,
       self._robot_event_cfg,
+      self._gravity_event_cfg,
     ):
       event_cfg.params["curriculum_stage"] = stage
 

@@ -19,6 +19,8 @@ from .consts import (
   CAPSULE_SCALE_RANGE,
   PRIMITIVE_DATASET_STAGE,
   PRIMITIVE_OBJECTS,
+  THREE_PRIMITIVE_STAGE,
+  primitive_gravity_fraction,
   primitive_randomization_fraction,
 )
 
@@ -31,7 +33,7 @@ _INACTIVE_SIZE = 1.0e-6
 _CAPSULE = 0
 _BOX = 1
 _SPHERE = 2
-_SIZE_REFRESH_INTERVALS = {2: 16, 3: 8, 4: 4, 5: 2}
+_SIZE_REFRESH_INTERVALS = {3: 16, 4: 16, 5: 8, 6: 4, 7: 2}
 _CACHED_DERIVED_FIELDS = (
   "body_subtreemass",
   "dof_invweight0",
@@ -58,6 +60,24 @@ def reset_joints_by_curriculum(
     position_range=position_range,
     velocity_range=velocity_range,
     asset_cfg=asset_cfg,
+  )
+
+
+def reset_gravity_by_curriculum(
+  env: ManagerBasedRlEnv,
+  env_ids: torch.Tensor,
+  gravity: tuple[float, float, float],
+  curriculum_stage: int,
+) -> None:
+  """Scale per-environment gravity for the current primitive lesson."""
+  env_ids = env_ids.to(device=env.device, dtype=torch.long)
+  gravity_w = torch.tensor(
+    gravity,
+    device=env.device,
+    dtype=env.sim.model.opt.gravity.dtype,
+  )
+  env.sim.model.opt.gravity[env_ids] = gravity_w * primitive_gravity_fraction(
+    curriculum_stage
   )
 
 
@@ -353,7 +373,7 @@ class reset_primitive_object_pose:
   def _apply_curriculum_stage(
     self, env: ManagerBasedRlEnv, env_ids: torch.Tensor, stage: int
   ) -> None:
-    if stage <= 1:
+    if stage <= 2:
       update_env_ids = env_ids[self._applied_stage[env_ids] != stage]
       if len(update_env_ids) == 0:
         return
@@ -366,9 +386,12 @@ class reset_primitive_object_pose:
     if stage != self._random_stage:
       self._random_stage = stage
       self._random_reset_count = 0
-    self.shape_ids[env_ids] = torch.randint(
-      len(PRIMITIVE_OBJECTS), (len(env_ids),), device=env.device
-    )
+    if stage < THREE_PRIMITIVE_STAGE:
+      self.shape_ids[env_ids] = _BOX
+    else:
+      self.shape_ids[env_ids] = torch.randint(
+        len(PRIMITIVE_OBJECTS), (len(env_ids),), device=env.device
+      )
     refresh_interval = _SIZE_REFRESH_INTERVALS[stage]
     periodic_refresh = self._random_reset_count % refresh_interval == 0
     invalid = self._slot_cache_stage[env_ids] != stage
@@ -386,7 +409,10 @@ class reset_primitive_object_pose:
     stage: int,
   ) -> None:
     selected_shape_ids = self.shape_ids[env_ids].clone()
-    for shape_id in range(len(PRIMITIVE_OBJECTS)):
+    shape_ids = (
+      (_BOX,) if stage < THREE_PRIMITIVE_STAGE else range(len(PRIMITIVE_OBJECTS))
+    )
+    for shape_id in shape_ids:
       self.shape_ids[env_ids] = shape_id
       self.sizes[env_ids] = self._sample_sizes(
         torch.full_like(env_ids, shape_id),
@@ -413,14 +439,13 @@ class reset_primitive_object_pose:
 
   def _sample_primitives(self, env_ids: torch.Tensor, stage: int) -> None:
     count = len(env_ids)
-    if stage == 0:
-      self.shape_ids[env_ids] = _CAPSULE
-      self.sizes[env_ids] = self._base_sizes[_CAPSULE]
+    if stage <= 2:
+      self.shape_ids[env_ids] = _BOX
+      self.sizes[env_ids] = self._base_sizes[_BOX]
       return
-    if stage == 1:
-      shape_ids = env_ids.remainder(len(PRIMITIVE_OBJECTS))
-      self.shape_ids[env_ids] = shape_ids
-      self.sizes[env_ids] = self._base_sizes[shape_ids]
+    if stage < THREE_PRIMITIVE_STAGE:
+      self.shape_ids[env_ids] = _BOX
+      self.sizes[env_ids] = self._sample_sizes(self.shape_ids[env_ids], stage)
       return
 
     shape_ids = torch.randint(len(PRIMITIVE_OBJECTS), (count,), device=env_ids.device)
@@ -633,7 +658,7 @@ class reset_mesh_object_pose:
 
 
 class reset_dropped_mesh_object_pose:
-  """Reset mesh variants above the floor with random SO(3) orientation."""
+  """Reset randomly oriented mesh variants at a height above the tabletop."""
 
   def __init__(self, cfg: EventTermCfg, env: ManagerBasedRlEnv):
     object_name = cfg.params["object_name"]
