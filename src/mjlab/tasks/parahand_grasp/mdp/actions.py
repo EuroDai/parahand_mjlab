@@ -18,14 +18,17 @@ class _ClippedActionCfg(BaseActionCfg):
 
 
 class _ClippedAction(BaseAction):
-  """Base action that stores sanitized, clipped policy actions."""
+  """Base action with sanitized policy actions and substep target ramps."""
 
   raw_action_limit: float
+  _ctrl_target: torch.Tensor
 
   def __init__(self, cfg: _ClippedActionCfg, env: ManagerBasedRlEnv):
     super().__init__(cfg, env)
     self.raw_action_limit = float(cfg.raw_action_limit)
     self._prev_raw_actions = torch.zeros_like(self._raw_actions)
+    self._ramp_substeps = env.cfg.decimation
+    self._ramp_substep = self._ramp_substeps
 
   @property
   def prev_raw_action(self) -> torch.Tensor:
@@ -67,6 +70,30 @@ class _ClippedAction(BaseAction):
     )[global_ctrl_ids]
     return ctrl_range.unsqueeze(0).expand(self.num_envs, -1, -1)
 
+  def _initialize_target_ramp(self) -> None:
+    """Initialize ramp state after a subclass creates ``_ctrl_target``."""
+    self._ramp_start = self._ctrl_target.clone()
+    self._applied_ctrl_target = self._ctrl_target.clone()
+
+  def _set_ctrl_target(self, target: torch.Tensor) -> None:
+    """Start a ramp from the last emitted target to a new control target."""
+    self._ramp_start.copy_(self._applied_ctrl_target)
+    self._ctrl_target.copy_(target)
+    self._ramp_substep = 0
+
+  def _ramped_ctrl_target(self) -> torch.Tensor:
+    """Return the target for the next physics substep without allocating."""
+    self._ramp_substep = min(self._ramp_substep + 1, self._ramp_substeps)
+    alpha = self._ramp_substep / self._ramp_substeps
+    self._applied_ctrl_target.copy_(self._ramp_start).lerp_(self._ctrl_target, alpha)
+    return self._applied_ctrl_target
+
+  def _reset_target_ramp(self, env_ids: torch.Tensor | slice) -> None:
+    """Re-anchor reset environments so their next action starts continuously."""
+    self._ramp_start[env_ids] = self._ctrl_target[env_ids]
+    self._applied_ctrl_target[env_ids] = self._ctrl_target[env_ids]
+    self._ramp_substep = self._ramp_substeps
+
 
 @dataclass(kw_only=True)
 class ParaHandRelativeJointPositionActionCfg(_ClippedActionCfg):
@@ -87,9 +114,9 @@ class ParaHandRelativeJointPositionActionCfg(_ClippedActionCfg):
 class ParaHandRelativeJointPositionAction(_ClippedAction):
   """Persistent joint targets advanced by each policy action.
 
-  Each policy action is added to the previous control target. Every physics
-  substep then tracks that same target until the next policy step. Resets
-  re-anchor the target to the measured joint positions.
+  Each policy action is added to the previous control target. The resulting
+  target is linearly ramped across physics substeps. Resets re-anchor the
+  target to the measured joint positions.
   """
 
   _ctrl_target: torch.Tensor
@@ -102,6 +129,7 @@ class ParaHandRelativeJointPositionAction(_ClippedAction):
     super().__init__(cfg, env)
     self._ctrl_range = self._actuator_ctrl_range()
     self._ctrl_target = self._entity.data.joint_pos[:, self.target_ids].clone()
+    self._initialize_target_ramp()
     target_index = {name: index for index, name in enumerate(self.target_names)}
     missing_names = set(cfg.coupled_finger_actuator_names) - target_index.keys()
     if missing_names:
@@ -121,10 +149,12 @@ class ParaHandRelativeJointPositionAction(_ClippedAction):
     target = self._ctrl_target + self._processed_actions
     target = target.clamp(self._ctrl_range[..., 0], self._ctrl_range[..., 1])
     self._apply_mcp_1_constraints(target)
-    self._ctrl_target.copy_(target)
+    self._set_ctrl_target(target)
 
   def apply_actions(self) -> None:
-    self._entity.set_joint_position_target(self._ctrl_target, joint_ids=self.target_ids)
+    self._entity.set_joint_position_target(
+      self._ramped_ctrl_target(), joint_ids=self.target_ids
+    )
 
   def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
     if env_ids is None:
@@ -132,6 +162,7 @@ class ParaHandRelativeJointPositionAction(_ClippedAction):
     super().reset(env_ids)
     current_position = self._entity.data.joint_pos[:, self.target_ids]
     self._ctrl_target[env_ids] = current_position[env_ids]
+    self._reset_target_ramp(env_ids)
 
   def _apply_mcp_1_constraints(self, target: torch.Tensor) -> None:
     middle_lower = torch.maximum(
@@ -173,7 +204,7 @@ class RelativeTendonLengthActionCfg(_ClippedActionCfg):
 
 
 class RelativeTendonLengthAction(_ClippedAction):
-  """Per-policy-step tendon targets relative to measured lengths."""
+  """Tendon targets relative to measured lengths, ramped across substeps."""
 
   _ctrl_target: torch.Tensor
 
@@ -185,16 +216,19 @@ class RelativeTendonLengthAction(_ClippedAction):
     super().__init__(cfg, env)
     self._ctrl_range = self._actuator_ctrl_range()
     self._ctrl_target = self._entity.data.tendon_len[:, self.target_ids].clone()
+    self._initialize_target_ramp()
 
   def process_actions(self, actions: torch.Tensor) -> None:
     super().process_actions(actions)
     current_length = self._entity.data.tendon_len[:, self.target_ids]
     target = current_length + self._processed_actions
     target = target.clamp(self._ctrl_range[..., 0], self._ctrl_range[..., 1])
-    self._ctrl_target.copy_(target)
+    self._set_ctrl_target(target)
 
   def apply_actions(self) -> None:
-    self._entity.set_tendon_len_target(self._ctrl_target, tendon_ids=self.target_ids)
+    self._entity.set_tendon_len_target(
+      self._ramped_ctrl_target(), tendon_ids=self.target_ids
+    )
 
   def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
     if env_ids is None:
@@ -208,3 +242,4 @@ class RelativeTendonLengthAction(_ClippedAction):
       self._ctrl_range[env_ids, :, 0],
       self._ctrl_range[env_ids, :, 1],
     )
+    self._reset_target_ramp(env_ids)

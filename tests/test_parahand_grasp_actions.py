@@ -10,7 +10,7 @@ from mjlab.tasks.parahand_grasp.mdp.actions import (
 )
 
 
-def test_relative_actions_hold_one_target_across_physics_substeps():
+def test_relative_actions_linearly_ramp_targets_across_physics_substeps():
   cfg = parahand_only_grasp_object_env_cfg()
   cfg.scene.num_envs = 1
   env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
@@ -28,21 +28,26 @@ def test_relative_actions_hold_one_target_across_physics_substeps():
   assert isinstance(joint_action, ParaHandRelativeJointPositionAction)
   assert isinstance(tendon_action, RelativeTendonLengthAction)
 
+  joint_start = joint_action._ramp_start.clone()
+  tendon_start = tendon_action._ramp_start.clone()
   joint_target = joint_action._ctrl_target.clone()
   tendon_target = tendon_action._ctrl_target.clone()
   initial_joint_pos = env.scene["robot"].data.joint_pos.clone()
 
-  for _ in range(cfg.decimation):
+  for substep in range(1, cfg.decimation + 1):
     env.action_manager.apply_action()
+    alpha = substep / cfg.decimation
+    expected_joint_target = torch.lerp(joint_start, joint_target, alpha)
+    expected_tendon_target = torch.lerp(tendon_start, tendon_target, alpha)
     assert torch.equal(joint_action._ctrl_target, joint_target)
     assert torch.equal(tendon_action._ctrl_target, tendon_target)
-    assert torch.equal(
+    assert torch.allclose(
       env.scene["robot"].data.joint_pos_target[:, joint_action.target_ids],
-      joint_target,
+      expected_joint_target,
     )
-    assert torch.equal(
+    assert torch.allclose(
       env.scene["robot"].data.tendon_len_target[:, tendon_action.target_ids],
-      tendon_target,
+      expected_tendon_target,
     )
     env.scene.write_data_to_sim()
     env.sim.step()
@@ -89,4 +94,6 @@ def test_relative_joint_action_accumulates_from_previous_target():
   joint_action.reset(torch.tensor([0]))
   current_position = env.scene["robot"].data.joint_pos[:, joint_action.target_ids]
   assert torch.allclose(joint_action._ctrl_target, current_position)
+  assert torch.allclose(joint_action._ramp_start, current_position)
+  assert torch.allclose(joint_action._applied_ctrl_target, current_position)
   env.close()

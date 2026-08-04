@@ -539,9 +539,7 @@ def _sample_box_surface_points(
     dim=-1,
   )
   face_weights = axis_weights[:, :, None].expand(-1, -1, 2).reshape(num_envs, 6)
-  face_cdf = torch.cumsum(
-    face_weights / face_weights.sum(dim=-1, keepdim=True), dim=-1
-  )
+  face_cdf = torch.cumsum(face_weights / face_weights.sum(dim=-1, keepdim=True), dim=-1)
   unit = _stratified_unit(num_points, half_sizes.device, half_sizes.dtype)
   face_ids = (unit[None, :, None] > face_cdf[:, None, :]).sum(dim=-1).clamp_max(5)
   face_membership = torch.nn.functional.one_hot(face_ids, num_classes=6)

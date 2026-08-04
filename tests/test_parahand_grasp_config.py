@@ -327,10 +327,16 @@ def test_grasp_rewards_use_aligned_smooth_contact_gate():
   assert object_lift.weight == 2.0
   assert object_lift.params["contact_threshold"] == 0.5
   assert object_lift.params["contact_temperature"] == 0.1
+  assert object_lift.params["contact_core_both_weight"] == 0.5
+  assert object_lift.params["contact_auxiliary_bonus"] == 0.5
   assert position_tracking.params["contact_threshold"] == 0.5
   assert position_tracking.params["contact_temperature"] == 0.1
+  assert position_tracking.params["contact_core_both_weight"] == 0.5
+  assert position_tracking.params["contact_auxiliary_bonus"] == 0.5
   assert good_finger_contact.params["threshold"] == 0.5
   assert good_finger_contact.params["temperature"] == 0.1
+  assert good_finger_contact.params["core_both_weight"] == 0.5
+  assert good_finger_contact.params["auxiliary_bonus"] == 0.5
   assert set(success.params) == {"command_name", "object_cfg", "pos_std"}
   assert success.params["pos_std"] == 0.1
 

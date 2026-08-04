@@ -65,6 +65,8 @@ _HAND_ACTION_SCALE = 0.03
 _TENDON_ACTION_SCALE = 0.005
 _CONTACT_THRESHOLD = 0.5
 _CONTACT_TEMPERATURE = 0.1
+_CONTACT_CORE_BOTH_WEIGHT = 0.5
+_CONTACT_AUXILIARY_BONUS = 0.5
 _TABLE_HEIGHT_EVENT_NAME = "reset_table_height"
 
 
@@ -353,6 +355,8 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
         "sensor_name": _FINGERTIP_CONTACT_SENSOR_NAME,
         "contact_threshold": _CONTACT_THRESHOLD,
         "contact_temperature": _CONTACT_TEMPERATURE,
+        "contact_core_both_weight": _CONTACT_CORE_BOTH_WEIGHT,
+        "contact_auxiliary_bonus": _CONTACT_AUXILIARY_BONUS,
       },
     ),
     "position_tracking": RewardTermCfg(
@@ -365,6 +369,8 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
         "std": 0.25,
         "contact_threshold": _CONTACT_THRESHOLD,
         "contact_temperature": _CONTACT_TEMPERATURE,
+        "contact_core_both_weight": _CONTACT_CORE_BOTH_WEIGHT,
+        "contact_auxiliary_bonus": _CONTACT_AUXILIARY_BONUS,
       },
     ),
     "good_finger_contact": RewardTermCfg(
@@ -374,6 +380,8 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
         "sensor_name": _FINGERTIP_CONTACT_SENSOR_NAME,
         "threshold": _CONTACT_THRESHOLD,
         "temperature": _CONTACT_TEMPERATURE,
+        "core_both_weight": _CONTACT_CORE_BOTH_WEIGHT,
+        "auxiliary_bonus": _CONTACT_AUXILIARY_BONUS,
       },
     ),
     "success": RewardTermCfg(

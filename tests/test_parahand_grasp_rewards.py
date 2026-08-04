@@ -11,19 +11,21 @@ from mjlab.tasks.parahand_grasp.config.parahand.env_cfgs import (
   parahand_only_grasp_object_env_cfg,
 )
 from mjlab.tasks.parahand_grasp.mdp.rewards import (
+  contact_score,
   object_lift,
   smooth_contact_score,
   success,
 )
 
 
-def test_smooth_contact_score_matches_thumb_times_strongest_other_finger():
+def test_smooth_contact_score_requires_core_contact_and_rewards_auxiliary_contact():
   force_magnitude = torch.tensor(
     [
-      [0.3, 0.3, 0.0, 0.0, 0.0],
-      [0.5, 0.5, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 0.0],
       [0.7, 0.7, 0.0, 0.0, 0.0],
-      [0.5, 0.3, 0.6, 0.4, 0.2],
+      [0.7, 0.0, 0.0, 0.7, 0.0],
+      [0.7, 0.7, 0.7, 0.0, 0.0],
+      [0.7, 0.7, 0.7, 0.7, 0.7],
     ]
   )
 
@@ -34,11 +36,28 @@ def test_smooth_contact_score_matches_thumb_times_strongest_other_finger():
   )
 
   finger_scores = torch.sigmoid((force_magnitude - 0.5) / 0.1)
-  expected = finger_scores[:, 0] * finger_scores[:, 1:].amax(dim=-1)
+  thumb, index, middle, ring, little = finger_scores.unbind(dim=-1)
+  likelihoods = torch.tensor([0.96, 0.92, 0.79, 0.39])
+  weights = 0.2 + 0.8 * torch.square(likelihoods / likelihoods[0])
+  index_weight, middle_weight, ring_weight, little_weight = weights
+  core_any = 1.0 - (1.0 - index) * (1.0 - middle)
+  core_both = torch.exp(
+    (index_weight * torch.log(index) + middle_weight * torch.log(middle))
+    / (index_weight + middle_weight)
+  )
+  core = 0.5 * core_any + 0.5 * core_both
+  auxiliary = (ring_weight * ring + little_weight * little) / (
+    ring_weight + little_weight
+  )
+  base_gate = thumb * core
+  expected = base_gate * (1.0 + 0.5 * (1.0 - base_gate) * auxiliary)
+
   torch.testing.assert_close(score, expected)
-  assert score[0].item() == pytest.approx(0.014209, abs=1.0e-6)
-  assert score[1].item() == pytest.approx(0.25)
-  assert score[2].item() == pytest.approx(0.775803, abs=1.0e-6)
+  assert score[0].item() < 1.0e-4
+  assert score[1].item() > 0.4
+  assert score[2].item() < 0.02
+  assert score[3].item() > 0.8
+  assert score[4].item() > score[3].item()
 
 
 def test_smooth_contact_score_rejects_nonpositive_temperature():
@@ -48,6 +67,69 @@ def test_smooth_contact_score_rejects_nonpositive_temperature():
       threshold=0.5,
       temperature=0.0,
     )
+
+
+@pytest.mark.parametrize(
+  ("parameter", "value", "message"),
+  [
+    ("core_both_weight", -0.1, "Core-both weight"),
+    ("core_both_weight", 1.1, "Core-both weight"),
+    ("auxiliary_bonus", -0.1, "Auxiliary bonus"),
+    ("auxiliary_bonus", 1.1, "Auxiliary bonus"),
+  ],
+)
+def test_smooth_contact_score_rejects_invalid_weights(
+  parameter: str,
+  value: float,
+  message: str,
+):
+  kwargs = {parameter: value}
+  with pytest.raises(ValueError, match=message):
+    smooth_contact_score(
+      torch.ones(1, 5),
+      threshold=0.5,
+      temperature=0.1,
+      **kwargs,
+    )
+
+
+def test_smooth_contact_score_requires_five_ordered_fingertips():
+  with pytest.raises(ValueError, match="requires thumb, index, middle, ring"):
+    smooth_contact_score(
+      torch.ones(1, 4),
+      threshold=0.5,
+      temperature=0.1,
+    )
+
+
+def test_contact_score_resolves_fingertips_by_sensor_name():
+  ordered_force_magnitude = torch.tensor([[0.7, 0.7, 0.7, 0.2, 0.1]])
+  sensor_order = [3, 0, 4, 2, 1]
+  sensor = SimpleNamespace(
+    data=SimpleNamespace(force=ordered_force_magnitude[:, sensor_order].unsqueeze(-1)),
+    primary_names=[
+      "ring_tac",
+      "thumb_tac",
+      "little_tac",
+      "middle_tac",
+      "index_tac",
+    ],
+  )
+  env = SimpleNamespace(scene={"fingertip_contact": sensor})
+
+  score = contact_score(
+    cast(Any, env),
+    sensor_name="fingertip_contact",
+    threshold=0.5,
+    temperature=0.1,
+  )
+
+  expected = smooth_contact_score(
+    ordered_force_magnitude,
+    threshold=0.5,
+    temperature=0.1,
+  )
+  torch.testing.assert_close(score, expected)
 
 
 def test_success_reward_does_not_require_contact():
@@ -96,6 +178,13 @@ def test_object_lift_uses_reset_relative_progress_and_smooth_contact():
   )
   sensor = SimpleNamespace(
     data=SimpleNamespace(force=force_magnitude.unsqueeze(-1)),
+    primary_names=[
+      "thumb_tac",
+      "index_tac",
+      "middle_tac",
+      "ring_tac",
+      "little_tac",
+    ],
   )
   env = SimpleNamespace(
     scene={"object": obj, "fingertip_contact": sensor},
@@ -142,6 +231,13 @@ def test_object_lift_clamps_downward_and_above_target_progress():
   )
   sensor = SimpleNamespace(
     data=SimpleNamespace(force=torch.full((2, 5, 1), 10.0)),
+    primary_names=[
+      "thumb_tac",
+      "index_tac",
+      "middle_tac",
+      "ring_tac",
+      "little_tac",
+    ],
   )
   env = SimpleNamespace(
     scene={"object": obj, "fingertip_contact": sensor},

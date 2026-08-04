@@ -16,6 +16,18 @@ if TYPE_CHECKING:
   from mjlab.viewer.debug_visualizer import DebugVisualizer
 
 
+_NON_THUMB_CONTACT_LIKELIHOODS = (0.96, 0.92, 0.79, 0.39)
+_CONTACT_WEIGHT_FLOOR = 0.2
+_CONTACT_WEIGHT_POWER = 2.0
+_FINGERTIP_CONTACT_NAMES = (
+  "thumb_tac",
+  "index_tac",
+  "middle_tac",
+  "ring_tac",
+  "little_tac",
+)
+
+
 class object_point_cloud_debug_visualizer:
   """Draw the actor's sampled object point cloud using debug spheres."""
 
@@ -128,17 +140,52 @@ def smooth_contact_score(
   force_magnitude: torch.Tensor,
   threshold: float,
   temperature: float,
+  core_both_weight: float = 0.5,
+  auxiliary_bonus: float = 0.5,
 ) -> torch.Tensor:
-  """Return a smooth thumb-plus-one-finger contact score."""
+  """Return a structured thumb, core-finger, and auxiliary-finger contact score."""
   if temperature <= 0.0:
     raise ValueError(f"Contact temperature must be positive, got {temperature}.")
-  if force_magnitude.shape[-1] < 2:
-    raise ValueError("Smooth contact scoring requires at least two fingertips.")
+  if not 0.0 <= core_both_weight <= 1.0:
+    raise ValueError(f"Core-both weight must be in [0, 1], got {core_both_weight}.")
+  if not 0.0 <= auxiliary_bonus <= 1.0:
+    raise ValueError(f"Auxiliary bonus must be in [0, 1], got {auxiliary_bonus}.")
+  if force_magnitude.shape[-1] != 5:
+    raise ValueError(
+      "Structured contact scoring requires thumb, index, middle, ring, "
+      f"and little fingertip forces, got {force_magnitude.shape[-1]}."
+    )
 
   finger_scores = torch.sigmoid((force_magnitude - threshold) / temperature)
-  thumb_score = finger_scores[:, 0]
-  other_score = finger_scores[:, 1:].amax(dim=-1)
-  return thumb_score * other_score
+  thumb_score, index_score, middle_score, ring_score, little_score = (
+    finger_scores.unbind(dim=-1)
+  )
+
+  contact_likelihoods = finger_scores.new_tensor(_NON_THUMB_CONTACT_LIKELIHOODS)
+  finger_weights = _CONTACT_WEIGHT_FLOOR + (1.0 - _CONTACT_WEIGHT_FLOOR) * torch.pow(
+    contact_likelihoods / contact_likelihoods[0], _CONTACT_WEIGHT_POWER
+  )
+  index_weight, middle_weight, ring_weight, little_weight = finger_weights
+
+  core_any_score = 1.0 - (1.0 - index_score) * (1.0 - middle_score)
+  core_scores = torch.stack((index_score, middle_score), dim=-1)
+  core_weights = torch.stack((index_weight, middle_weight))
+  core_both_score = torch.exp(
+    (
+      torch.log(core_scores.clamp_min(torch.finfo(core_scores.dtype).eps))
+      * core_weights
+    ).sum(dim=-1)
+    / core_weights.sum()
+  )
+  core_score = (
+    1.0 - core_both_weight
+  ) * core_any_score + core_both_weight * core_both_score
+
+  auxiliary_score = (ring_weight * ring_score + little_weight * little_score) / (
+    ring_weight + little_weight
+  )
+  base_gate = thumb_score * core_score
+  return base_gate * (1.0 + auxiliary_bonus * (1.0 - base_gate) * auxiliary_score)
 
 
 def contact_score(
@@ -146,13 +193,29 @@ def contact_score(
   sensor_name: str,
   threshold: float,
   temperature: float,
+  core_both_weight: float = 0.5,
+  auxiliary_bonus: float = 0.5,
 ) -> torch.Tensor:
-  """Score thumb-plus-one-finger object contact with a smooth force gate."""
+  """Score structured fingertip object contact with a smooth force gate."""
   sensor: ContactSensor = env.scene[sensor_name]
   force = sensor.data.force
   assert force is not None
   force_magnitude = torch.linalg.vector_norm(force, dim=-1)
-  return smooth_contact_score(force_magnitude, threshold, temperature)
+  primary_names = sensor.primary_names
+  try:
+    fingertip_indices = [primary_names.index(name) for name in _FINGERTIP_CONTACT_NAMES]
+  except ValueError as exc:
+    raise ValueError(
+      f"Contact sensor '{sensor_name}' must contain {_FINGERTIP_CONTACT_NAMES}; "
+      f"got {primary_names}."
+    ) from exc
+  return smooth_contact_score(
+    force_magnitude[:, fingertip_indices],
+    threshold,
+    temperature,
+    core_both_weight,
+    auxiliary_bonus,
+  )
 
 
 def position_tracking(
@@ -163,6 +226,8 @@ def position_tracking(
   std: float,
   contact_threshold: float,
   contact_temperature: float,
+  contact_core_both_weight: float = 0.5,
+  contact_auxiliary_bonus: float = 0.5,
 ) -> torch.Tensor:
   """Track the target position while maintaining a smooth contact gate."""
   obj: Entity = env.scene[object_cfg.name]
@@ -175,6 +240,8 @@ def position_tracking(
     sensor_name,
     contact_threshold,
     contact_temperature,
+    contact_core_both_weight,
+    contact_auxiliary_bonus,
   )
   return (1.0 - torch.tanh(distance / std)) * contact_gate
 
@@ -202,6 +269,8 @@ class object_lift:
     sensor_name: str,
     contact_threshold: float,
     contact_temperature: float,
+    contact_core_both_weight: float = 0.5,
+    contact_auxiliary_bonus: float = 0.5,
   ) -> torch.Tensor:
     del object_cfg
     object_height = self._object_height()
@@ -214,6 +283,8 @@ class object_lift:
       sensor_name,
       contact_threshold,
       contact_temperature,
+      contact_core_both_weight,
+      contact_auxiliary_bonus,
     )
     return lift_progress * contact_gate
 
@@ -227,9 +298,18 @@ def good_finger_contact(
   sensor_name: str,
   threshold: float,
   temperature: float,
+  core_both_weight: float = 0.5,
+  auxiliary_bonus: float = 0.5,
 ) -> torch.Tensor:
-  """Reward smooth thumb-plus-one-finger object contact."""
-  return contact_score(env, sensor_name, threshold, temperature)
+  """Reward structured smooth fingertip object contact."""
+  return contact_score(
+    env,
+    sensor_name,
+    threshold,
+    temperature,
+    core_both_weight,
+    auxiliary_bonus,
+  )
 
 
 def success(
