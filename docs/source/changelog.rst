@@ -26,8 +26,11 @@ Added
   object-contact force magnitude of each episode.
 - Added ``play --curriculum-stage`` to force ParaHand grasp evaluation to use a
   specific curriculum lesson without restarting the online promotion history.
-  Stage 2 playback constructs the configured DFCData or RobustDexGrasp mesh
+  Stage 8 playback constructs the configured DFCData or RobustDexGrasp mesh
   environment instead of trying to apply a primitive reset stage.
+- Added a shared ``--curriculum-stage`` interface to ``train`` and ``play``.
+  ParaHand stages 0--7 select the corresponding primitive lesson, while Stage 8
+  starts the mesh dataset phase with Stage 7 primitive rehearsal.
 - Added a project-level ParaHand rollout tool that collects complete batched
   episodes, indexes them by individual termination reason, and replays selected
   trajectories interactively in Viser without rerunning the policy.
@@ -151,6 +154,9 @@ Changed
 Fixed
 ^^^^^
 
+- Fixed ParaHand ``play`` constructing the training-only unseen evaluator after
+  curriculum overrides had removed the evaluator's required ``object_lesson``
+  configuration.
 - Fixed comma-separated ParaHand-only geom contact parameters preventing MuJoCo
   from parsing ``hand_only.xml`` and starting training.
 - Fixed ParaHand's primitive curriculum averaging a full maximum-capacity success

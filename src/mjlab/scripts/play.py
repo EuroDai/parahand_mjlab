@@ -172,6 +172,14 @@ def _make_unseen_test_play_env_cfg(env_cfg, agent_cfg):
   return eval_cfg
 
 
+def _make_play_runner_cfg(agent_cfg) -> dict:
+  """Build inference runner config without training-only background evaluators."""
+  runner_cfg = asdict(agent_cfg)
+  if "unseen_eval" in runner_cfg:
+    runner_cfg["unseen_eval"] = False
+  return runner_cfg
+
+
 def run_play(task_id: str, cfg: PlayConfig):
   configure_torch_backends()
 
@@ -336,11 +344,7 @@ def run_play(task_id: str, cfg: PlayConfig):
       policy = PolicyRandom()
   else:
     runner_cls = load_runner_cls(task_id) or MjlabOnPolicyRunner
-    runner_cfg = asdict(agent_cfg)
-    if cfg.unseen_test:
-      # The viewer is already running the unseen environment; do not allocate the
-      # runner's separate training-time evaluator as well.
-      runner_cfg["unseen_eval"] = False
+    runner_cfg = _make_play_runner_cfg(agent_cfg)
     runner = runner_cls(env, runner_cfg, device=device)
     runner.load(
       str(resume_path), load_cfg={"actor": True}, strict=True, map_location=device

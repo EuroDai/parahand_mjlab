@@ -142,7 +142,7 @@ def test_object_curriculum_uses_continuously_randomized_primitives():
   assert runner_cfg.stage2_enabled is True
   assert runner_cfg.unseen_eval_interval == 300
   assert runner_cfg.unseen_eval_start_stage == 2
-  assert runner_cfg.stage2_dataset == "dfc"
+  assert runner_cfg.stage2_dataset == "robustdex"
   assert runner_cfg.stage2_primitive_ratio == 0.25
   assert runner_cfg.stage2_shard_size_per_rank == 128
   assert runner_cfg.stage2_shard_update_interval == 200

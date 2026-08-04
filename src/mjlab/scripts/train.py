@@ -6,13 +6,16 @@ import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import tyro
 
 from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
+from mjlab.managers import CurriculumManager
 from mjlab.rl import MjlabOnPolicyRunner, RslRlBaseRunnerCfg, RslRlVecEnvWrapper
 from mjlab.scripts._cli import maybe_print_top_level_help
+from mjlab.tasks.parahand_grasp.dfc_objects import apply_primitive_stage_randomization
+from mjlab.tasks.parahand_grasp.mdp.consts import PRIMITIVE_DATASET_STAGE
 from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.tracking.mdp import MotionCommandCfg
 from mjlab.utils.gpu import select_gpus
@@ -31,6 +34,8 @@ class TrainConfig:
   video_length: int = 200
   video_interval: int = 2000
   enable_nan_guard: bool = False
+  curriculum_stage: int | None = None
+  """Start training from this curriculum stage; ParaHand supports stages 0--8."""
   log_root: str = "logs/rsl_rl"
   """Root directory under which experiment logs are written."""
   torchrunx_log_dir: str | None = None
@@ -44,6 +49,45 @@ class TrainConfig:
     env_cfg = load_env_cfg(task_id)
     agent_cfg = load_rl_cfg(task_id)
     return TrainConfig(env=env_cfg, agent=agent_cfg)
+
+
+def _prepare_training_curriculum_stage(cfg: TrainConfig) -> None:
+  """Apply a requested ParaHand stage to static configs before env creation."""
+  stage = cfg.curriculum_stage
+  if stage is None:
+    return
+  if not 0 <= stage <= PRIMITIVE_DATASET_STAGE:
+    raise ValueError(
+      f"curriculum_stage must be between 0 and {PRIMITIVE_DATASET_STAGE}, got {stage}."
+    )
+
+  apply_primitive_stage_randomization(
+    cfg.env,
+    min(stage, PRIMITIVE_DATASET_STAGE - 1),
+  )
+  if stage == PRIMITIVE_DATASET_STAGE and not hasattr(
+    cfg.agent, "stage2_start_immediately"
+  ):
+    raise ValueError(
+      f"--curriculum-stage {stage} requires a runner with a dataset stage."
+    )
+  if hasattr(cfg.agent, "stage2_start_immediately"):
+    cast(Any, cfg.agent).stage2_start_immediately = stage == PRIMITIVE_DATASET_STAGE
+
+
+def _set_training_curriculum_stage(env: ManagerBasedRlEnv, stage: int) -> None:
+  """Synchronize the live curriculum term after manager initialization."""
+  manager = cast(CurriculumManager, env.curriculum_manager)
+  if "object_lesson" not in manager.active_terms:
+    raise ValueError(
+      "--curriculum-stage is only supported for tasks with an object_lesson curriculum."
+    )
+  term = manager.get_term_cfg("object_lesson").func
+  set_stage = getattr(term, "set_stage", None)
+  if not callable(set_stage):
+    raise TypeError("object_lesson curriculum does not support setting its stage.")
+  set_stage(stage)
+  print(f"[INFO] Training curriculum stage forced to {stage}")
 
 
 def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
@@ -62,6 +106,8 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
     seed = cfg.agent.seed + rank
 
   configure_torch_backends()
+
+  _prepare_training_curriculum_stage(cfg)
 
   cfg.agent.seed = seed
   cfg.env.seed = seed
@@ -110,6 +156,8 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
   env = ManagerBasedRlEnv(
     cfg=cfg.env, device=device, render_mode="rgb_array" if cfg.video else None
   )
+  if cfg.curriculum_stage is not None:
+    _set_training_curriculum_stage(env, cfg.curriculum_stage)
 
   log_root_path = log_dir.parent  # Go up from specific run dir to experiment dir.
 

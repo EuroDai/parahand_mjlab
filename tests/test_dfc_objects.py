@@ -17,8 +17,14 @@ from mjlab.entity import VariantEntityCfg
 from mjlab.scripts.play import (
   PLAY_TYRO_FLAGS,
   PlayConfig,
+  _make_play_runner_cfg,
   _make_stage2_play_env_cfg,
   _make_unseen_test_play_env_cfg,
+)
+from mjlab.scripts.train import (
+  TrainConfig,
+  _prepare_training_curriculum_stage,
+  _set_training_curriculum_stage,
 )
 from mjlab.tasks.manipulation.mdp.commands import LiftingCommandCfg
 from mjlab.tasks.parahand_grasp.config.parahand.env_cfgs import (
@@ -340,6 +346,39 @@ def test_play_unseen_test_is_value_free_flag():
   )
 
   assert cfg.unseen_test is True
+
+
+def test_play_disables_training_time_unseen_evaluator():
+  agent_cfg = parahand_only_grasp_object_ppo_runner_cfg()
+
+  runner_cfg = _make_play_runner_cfg(agent_cfg)
+
+  assert runner_cfg["unseen_eval"] is False
+  assert agent_cfg.unseen_eval is True
+
+
+def test_train_curriculum_stage_eight_enables_dataset_stage():
+  env_cfg = parahand_only_grasp_object_env_cfg()
+  agent_cfg = parahand_only_grasp_object_ppo_runner_cfg()
+  cfg = TrainConfig(env=env_cfg, agent=agent_cfg, curriculum_stage=8)
+
+  _prepare_training_curriculum_stage(cfg)
+
+  assert agent_cfg.stage2_start_immediately is True
+  _assert_stage_seven_randomization(env_cfg)
+
+
+def test_train_curriculum_stage_sets_live_curriculum_term():
+  term = Mock()
+  manager = SimpleNamespace(
+    active_terms=["object_lesson"],
+    get_term_cfg=Mock(return_value=SimpleNamespace(func=term)),
+  )
+  env = SimpleNamespace(curriculum_manager=manager)
+
+  _set_training_curriculum_stage(cast(Any, env), 6)
+
+  term.set_stage.assert_called_once_with(6)
 
 
 def test_fixed_eval_rng_restores_training_rng():
