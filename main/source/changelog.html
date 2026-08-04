@@ -58,7 +58,7 @@
     <link rel="prev" title="Research" href="research.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Aug 02, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 04, 2026"/>
   </head>
   
   
@@ -551,8 +551,11 @@ using debug spheres. Training configurations do not register the visualizer.</p>
 object-contact force magnitude of each episode.</p></li>
 <li><p>Added <code class="docutils literal notranslate"><span class="pre">play</span> <span class="pre">--curriculum-stage</span></code> to force ParaHand grasp evaluation to use a
 specific curriculum lesson without restarting the online promotion history.
-Stage 2 playback constructs the configured DFCData or RobustDexGrasp mesh
+Stage 8 playback constructs the configured DFCData or RobustDexGrasp mesh
 environment instead of trying to apply a primitive reset stage.</p></li>
+<li><p>Added a shared <code class="docutils literal notranslate"><span class="pre">--curriculum-stage</span></code> interface to <code class="docutils literal notranslate"><span class="pre">train</span></code> and <code class="docutils literal notranslate"><span class="pre">play</span></code>.
+ParaHand stages 0–7 select the corresponding primitive lesson, while Stage 8
+starts the mesh dataset phase with Stage 7 primitive rehearsal.</p></li>
 <li><p>Added a project-level ParaHand rollout tool that collects complete batched
 episodes, indexes them by individual termination reason, and replays selected
 trajectories interactively in Viser without rerunning the policy.</p></li>
@@ -678,6 +681,9 @@ reward terms can show them all. Defaults to 20, preserving previous behavior.
 <section id="fixed">
 <h3>Fixed<a class="headerlink" href="#fixed" title="Link to this heading">#</a></h3>
 <ul class="simple">
+<li><p>Fixed ParaHand <code class="docutils literal notranslate"><span class="pre">play</span></code> constructing the training-only unseen evaluator after
+curriculum overrides had removed the evaluator’s required <code class="docutils literal notranslate"><span class="pre">object_lesson</span></code>
+configuration.</p></li>
 <li><p>Fixed comma-separated ParaHand-only geom contact parameters preventing MuJoCo
 from parsing <code class="docutils literal notranslate"><span class="pre">hand_only.xml</span></code> and starting training.</p></li>
 <li><p>Fixed ParaHand’s primitive curriculum averaging a full maximum-capacity success
@@ -1702,7 +1708,7 @@ By The mjlab Developers
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 02, 2026.
+  Last updated on Aug 04, 2026.
   <br/>
 </p>
   </div>
