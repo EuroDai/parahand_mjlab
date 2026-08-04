@@ -592,6 +592,8 @@ objects release 0.10–0.15 m above it using their oriented point-cloud support.
 <section id="changed">
 <h3>Changed<a class="headerlink" href="#changed" title="Link to this heading">#</a></h3>
 <ul class="simple">
+<li><p>ParaHand joint-position and tendon-length action targets now linearly ramp from
+the prior emitted target to the policy target over each physics decimation interval.</p></li>
 <li><p>All ParaHand primitive curriculum stages now use a 4096-episode success window
 and permit promotion after 1024 completed episodes. Stage 0–7 promotion
 thresholds are now 85%, 85%, 80%, 80%, 75%, 72%, 72%, and 70%, respectively.</p></li>
@@ -616,9 +618,11 @@ learning rate matches para_hand_mujoco at <code class="docutils literal notransl
 log-probability ratios, skip non-finite losses and gradients, and prevent
 adaptive scheduling from raising the learning rate above its configured initial
 value.</p></li>
-<li><p>ParaHand grasp contact rewards now use a smooth thumb-plus-one-finger force
-score around the 0.5 threshold instead of a hard Boolean gate. The smooth score
-gates contact and position-tracking rewards; success remains position-only.</p></li>
+<li><p>ParaHand grasp contact rewards now use a smooth structured force gate that
+requires the thumb and an index-or-middle core contact, rewards simultaneous
+index-and-middle contact, and treats ring and little contacts as weighted
+bonuses instead of substitutes. The score gates contact and position-tracking
+rewards; success remains position-only.</p></li>
 <li><p>ParaHand grasp actor and critic observations now retain each fingertip contact
 force’s signed x, y, and z components in the robot base frame instead of reducing
 each force to its magnitude. Per-episode contact metrics remain scalar magnitudes.</p></li>
