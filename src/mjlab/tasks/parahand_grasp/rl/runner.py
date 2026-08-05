@@ -43,7 +43,7 @@ class ParaHandOnPolicyRunnerCfg(RslRlOnPolicyRunnerCfg):
   """Evaluate DFCData unseen variants periodically during training."""
   unseen_eval_interval: int = 300
   """Number of PPO updates between unseen evaluations."""
-  unseen_eval_start_stage: int = 2
+  unseen_eval_start_stage: int = 3
   """First curriculum stage that records unseen-object success."""
   unseen_eval_dataset_dir: str = "datasets/grasp_objects/DFCData"
   """DFCData root containing ``processed/v1/manifest.json``."""
@@ -180,7 +180,7 @@ class ParaHandOnPolicyRunner(ManipulationOnPolicyRunner):
     eval_interval = int(train_cfg.get("unseen_eval_interval", 300))
     if eval_interval < 1:
       raise ValueError("unseen_eval_interval must be positive.")
-    eval_start_stage = int(train_cfg.get("unseen_eval_start_stage", 2))
+    eval_start_stage = int(train_cfg.get("unseen_eval_start_stage", 3))
     if not 0 <= eval_start_stage <= PRIMITIVE_DATASET_STAGE:
       raise ValueError(
         f"unseen_eval_start_stage must be between 0 and {PRIMITIVE_DATASET_STAGE}."

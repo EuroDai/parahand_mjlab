@@ -1,20 +1,30 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import mujoco
 
 FIRST_LESSON_OBJECT_NAME = "object_box"
-PRIMITIVE_DATASET_STAGE = 6
-THREE_PRIMITIVE_STAGE = 2
-ORIENTATION_RANDOMIZATION_STAGE = 1
-PALM_TRACKING_LAST_STAGE = 4
-ORIGINAL_PALM_STAGE = 5
-PRIMITIVE_RANDOMIZATION_FRACTIONS = (0.0, 0.1, 0.1, 0.5, 1.0, 1.0)
-PRIMITIVE_GRAVITY_FRACTIONS = (0.0, 0.5, 0.5, 1.0, 1.0, 1.0)
+PRIMITIVE_DATASET_STAGE = 7
+ORIENTATION_RANDOMIZATION_STAGE = 3
+PALM_TRACKING_LAST_STAGE = 5
+ORIGINAL_PALM_STAGE = 6
+PRIMITIVE_RANDOMIZATION_FRACTIONS = (0.0, 0.0, 0.0, 0.1, 0.5, 1.0, 1.0)
+PRIMITIVE_GRAVITY_FRACTIONS = (0.0, 0.0, 0.0, 0.2, 0.5, 1.0, 1.0)
 CAPSULE_SCALE_RANGE = (0.5, 2.0)
 BOX_SCALE_RANGE = (0.5, 1.0)
 SPHERE_SCALE_RANGE = (0.5, 1.5)
+POINT_CLOUD_NOISE_STD_MAX_M = 0.001
+OBJECT_DENSITY_FACTOR_RANGE = (0.75, 1.25)
+OBJECT_COM_OFFSET_MAX_M = 0.002
+OBJECT_FRICTION_FACTOR_RANGE = (0.7, 1.3)
+TABLE_FRICTION_FACTOR_RANGE = (0.8, 1.2)
+JOINT_DAMPING_FACTOR_RANGE = (0.8, 1.2)
+ACTUATOR_GAIN_FACTOR_RANGE = (0.9, 1.1)
+ACTUATOR_EFFORT_FACTOR_RANGE = (0.9, 1.1)
+GRAVITY_MAGNITUDE_FACTOR_RANGE = (0.99, 1.01)
+GRAVITY_TILT_MAX_RAD = math.radians(1.0)
 # Backward-compatible box-range alias for downstream imports.
 BOX_SPHERE_SCALE_RANGE = BOX_SCALE_RANGE
 # Backward-compatible aggregate range for downstream imports.
@@ -75,3 +85,22 @@ PRIMITIVE_OBJECTS = (
 )
 
 PRIMITIVE_OBJECT_NAMES = tuple(obj.name for obj in PRIMITIVE_OBJECTS)
+
+# Probabilities follow PRIMITIVE_OBJECTS order: capsule, box, sphere.
+PRIMITIVE_SHAPE_PROBABILITIES = (
+  (0.0, 1.0, 0.0),
+  (0.75, 0.25, 0.0),
+  (0.125, 0.125, 0.75),
+  (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0),
+  (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0),
+  (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0),
+  (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0),
+)
+
+
+def primitive_shape_probabilities(stage: int) -> tuple[float, float, float]:
+  if not 0 <= stage < PRIMITIVE_DATASET_STAGE:
+    raise ValueError(
+      f"Primitive curriculum stage must be in [0, {PRIMITIVE_DATASET_STAGE - 1}]."
+    )
+  return PRIMITIVE_SHAPE_PROBABILITIES[stage]

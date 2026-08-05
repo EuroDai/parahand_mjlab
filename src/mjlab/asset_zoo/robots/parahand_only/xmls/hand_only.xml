@@ -127,9 +127,9 @@
             <joint name="palm_translation_x" axis="0 0 1" class="palm_translation" range="-0.5 0.5"/>
             <joint name="palm_translation_y" axis="1 0 0" class="palm_translation" range="-0.5 0.5"/>
             <joint name="palm_translation_z" axis="0 1 0" class="palm_translation" range="-0.5 1"/>
-            <joint name="palm_rotation_x" axis="1 0 0" class="palm_rotation" range="-2 2"/>
+            <joint name="palm_rotation_x" axis="1 0 0" class="palm_rotation" range="-0.5 0.5"/>
             <joint name="palm_rotation_y" axis="0 1 0" class="palm_rotation"/>
-            <joint name="palm_rotation_z" axis="0 0 1" class="palm_rotation"/>
+            <joint name="palm_rotation_z" axis="0 0 1" class="palm_rotation" range="-2 2"/>
             <body name="thumb_mc_1" pos="0.01905 0 0.05851" euler="3.14 1.57 0">
                 <joint name="thumb_cmc_1" type="hinge" axis="0 1 0" class="thumb_joint" range="0 0.785"/>
                 <geom type="box" pos="0 0 0.01" size="0.001 0.001 0.002" class="visual"/>

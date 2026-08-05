@@ -20,6 +20,7 @@ from mjlab.tasks.parahand_grasp.mdp.commands import (
 from mjlab.tasks.velocity import mdp
 from mjlab.terrains import TerrainEntityCfg
 from mjlab.utils.nan_guard import NanGuardCfg
+from mjlab.utils.noise import GaussianNoiseCfg as Gnoise
 from mjlab.utils.noise import UniformNoiseCfg as Unoise
 from mjlab.viewer import ViewerConfig
 
@@ -94,6 +95,10 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
         "flatten": True,
         "curriculum_event_name": "reset_object_pose",
       },
+      noise=Gnoise(
+        mean=0.0,
+        std=parahand_mdp.POINT_CLOUD_NOISE_STD_MAX_M,
+      ),
       clip=(-2.0, 2.0),
     ),
     "object_to_palm_position_b": ObservationTermCfg(
@@ -300,6 +305,21 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
         "table_clearance": 0.003,
       },
     ),
+    "reset_teacher_physics": EventTermCfg(
+      func=parahand_mdp.randomize_teacher_physics,
+      mode="reset",
+      params={
+        "object_cfg": SceneEntityCfg("object"),
+        "table_cfg": SceneEntityCfg("table"),
+        "robot_cfg": SceneEntityCfg(
+          "robot",
+          joint_names=".*",
+          actuator_names=".*",
+        ),
+        "gravity": (0.0, 0.0, -9.81),
+        "curriculum_stage": 0,
+      },
+    ),
   }
 
   fingertip_contact_sensor_cfg = ContactSensorCfg(
@@ -431,10 +451,11 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
         "table_event_name": "reset_table_height",
         "robot_event_name": "reset_robot_joints",
         "gravity_event_name": "reset_gravity",
+        "physics_event_name": "reset_teacher_physics",
         "command_name": "object_pose",
         "tendon_action_name": "tendon_length",
         "object_name": "object",
-        "promotion_threshold": (0.85, 0.80, 0.75, 0.72, 0.70, 0.70),
+        "promotion_threshold": (0.85, 0.80, 0.80, 0.75, 0.72, 0.70, 0.70),
         "success_threshold": 0.05,
         "success_window_size": 4096,
         "min_completed_episodes": 1024,

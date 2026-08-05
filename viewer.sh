@@ -31,4 +31,4 @@ uv run play Mjlab-Grasp-Object-ParaHand-Only \
   --num-envs 30 \
   --episode-length-s 20 \
   --checkpoint-file "$CHECKPOINT_FILE" \
-  --curriculum-stage 2
+  --curriculum-stage 1

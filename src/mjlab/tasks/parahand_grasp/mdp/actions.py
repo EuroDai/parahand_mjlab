@@ -264,9 +264,10 @@ class RelativeTendonLengthAction(_ClippedAction):
     offset = torch.empty_like(current).uniform_(*cfg.reset_target_range)
     center = self._reset_target_center[env_ids]
     reset_base = torch.where(torch.isfinite(center), center, current)
-    self._ctrl_target[env_ids] = (reset_base + offset).clamp(
+    reset_target = (reset_base + offset).clamp(
       self._ctrl_range[env_ids, :, 0],
       self._ctrl_range[env_ids, :, 1],
     )
+    self._ctrl_target[env_ids] = reset_target
     self._reset_target_center[env_ids] = torch.nan
     self._reset_target_ramp(env_ids)

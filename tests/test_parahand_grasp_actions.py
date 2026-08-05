@@ -1,3 +1,5 @@
+import math
+
 import mujoco
 import torch
 
@@ -13,7 +15,16 @@ from mjlab.tasks.parahand_grasp.mdp.actions import (
   ParaHandRelativeJointPositionAction,
   RelativeTendonLengthAction,
 )
+from mjlab.tasks.parahand_grasp.mdp.consts import (
+  GRAVITY_TILT_MAX_RAD,
+  OBJECT_COM_OFFSET_MAX_M,
+  OBJECT_DENSITY_FACTOR_RANGE,
+  OBJECT_FRICTION_FACTOR_RANGE,
+  ORIGINAL_PALM_STAGE,
+  TABLE_FRICTION_FACTOR_RANGE,
+)
 from mjlab.tasks.parahand_grasp.mdp.events import (
+  randomize_teacher_physics,
   reset_joints_above_table,
   reset_primitive_object_pose,
 )
@@ -146,6 +157,21 @@ def test_stage_zero_uses_complete_follow_object_hand_frame():
     env.close()
 
 
+def test_stage_zero_static_override_allows_curriculum_startup():
+  cfg = parahand_only_grasp_object_env_cfg()
+  cfg.scene.num_envs = 1
+  apply_primitive_stage_randomization(cfg, 0)
+  env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
+  try:
+    env.reset(seed=0)
+    point_cloud_cfg = env.observation_manager.get_term_cfg(
+      "actor", "object_point_cloud_b"
+    )
+    assert point_cloud_cfg.noise is None
+  finally:
+    env.close()
+
+
 def test_capsule_reset_uses_dedicated_active_joint_and_tendon_references():
   cfg = parahand_only_grasp_object_env_cfg()
   cfg.scene.num_envs = 128
@@ -232,10 +258,10 @@ def test_capsule_reset_uses_dedicated_active_joint_and_tendon_references():
     env.close()
 
 
-def test_stage_five_keeps_existing_passive_joint_reset_path():
+def test_home_random_palm_stage_keeps_existing_passive_joint_reset_path():
   cfg = parahand_only_grasp_object_env_cfg()
   cfg.scene.num_envs = 8
-  apply_primitive_stage_randomization(cfg, 5)
+  apply_primitive_stage_randomization(cfg, ORIGINAL_PALM_STAGE)
   cfg.curriculum = {}
   env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
   try:
@@ -246,5 +272,85 @@ def test_stage_five_keeps_existing_passive_joint_reset_path():
       preserve_order=True,
     )
     assert torch.all(robot.data.joint_pos[:, passive_ids] == 0.0)
+    joint_reset = env.event_manager.get_term_cfg("reset_robot_joints").func
+    assert isinstance(joint_reset, reset_joints_above_table)
+    assert torch.isfinite(robot.data.joint_pos).all()
+    tendon_action = env.action_manager.get_term("tendon_length")
+    assert isinstance(tendon_action, RelativeTendonLengthAction)
+    assert torch.isfinite(tendon_action._ctrl_target).all()
+  finally:
+    env.close()
+
+
+def test_teacher_physics_randomization_uses_full_ranges_without_accumulation():
+  cfg = parahand_only_grasp_object_env_cfg()
+  cfg.scene.num_envs = 64
+  apply_primitive_stage_randomization(cfg, ORIGINAL_PALM_STAGE)
+  cfg.curriculum = {}
+  env = ManagerBasedRlEnv(cfg=cfg, device="cpu")
+
+  def assert_current_reset_is_bounded() -> None:
+    object_reset = env.event_manager.get_term_cfg("reset_object_pose").func
+    physics = env.event_manager.get_term_cfg("reset_teacher_physics").func
+    assert isinstance(object_reset, reset_primitive_object_pose)
+    assert isinstance(physics, randomize_teacher_physics)
+
+    sizes = object_reset.sizes
+    shape_ids = object_reset.shape_ids
+    nominal_mass = torch.empty(env.num_envs)
+    capsule = shape_ids == 0
+    box = shape_ids == 1
+    sphere = shape_ids == 2
+    nominal_mass[box] = 500.0 * 8.0 * sizes[box].prod(dim=-1)
+    nominal_mass[sphere] = 500.0 * (4.0 / 3.0) * math.pi * sizes[sphere, 0].pow(3)
+    radius = sizes[capsule, 0]
+    half_length = sizes[capsule, 1]
+    nominal_mass[capsule] = 500.0 * (
+      math.pi * radius.square() * (2.0 * half_length)
+      + (4.0 / 3.0) * math.pi * radius.pow(3)
+    )
+    object_entity = env.scene["object"]
+    object_body_id = int(object_entity.indexing.body_ids[0].item())
+    model = env.sim.model
+    density_factor = model.body_mass[:, object_body_id] / nominal_mass
+    assert torch.all(density_factor >= OBJECT_DENSITY_FACTOR_RANGE[0])
+    assert torch.all(density_factor <= OBJECT_DENSITY_FACTOR_RANGE[1])
+    assert torch.all(
+      torch.linalg.vector_norm(model.body_ipos[:, object_body_id], dim=-1)
+      <= math.sqrt(3.0) * OBJECT_COM_OFFSET_MAX_M
+    )
+    object_friction = model.geom_friction[:, object_entity.indexing.geom_ids, 0].mean(
+      dim=-1
+    )
+    table_entity = env.scene["table"]
+    table_friction = model.geom_friction[:, table_entity.indexing.geom_ids, 0].mean(
+      dim=-1
+    )
+    assert torch.all(object_friction >= OBJECT_FRICTION_FACTOR_RANGE[0])
+    assert torch.all(object_friction <= OBJECT_FRICTION_FACTOR_RANGE[1])
+    assert torch.all(table_friction >= TABLE_FRICTION_FACTOR_RANGE[0])
+    assert torch.all(table_friction <= TABLE_FRICTION_FACTOR_RANGE[1])
+
+    gravity = model.opt.gravity
+    gravity_magnitude = torch.linalg.vector_norm(gravity, dim=-1)
+    assert torch.all(gravity_magnitude >= 9.81 * 0.99)
+    assert torch.all(gravity_magnitude <= 9.81 * 1.01)
+    gravity_tilt = torch.acos((-gravity[:, 2] / gravity_magnitude).clamp(-1.0, 1.0))
+    assert torch.all(gravity_tilt <= GRAVITY_TILT_MAX_RAD + 1.0e-5)
+    robot = env.scene["robot"]
+    assert robot.indexing.ctrl_ids is not None
+    for values in (
+      model.dof_damping[:, robot.indexing.joint_v_adr],
+      model.actuator_gainprm[:, robot.indexing.ctrl_ids],
+      model.actuator_biasprm[:, robot.indexing.ctrl_ids],
+      model.actuator_forcerange[:, robot.indexing.ctrl_ids],
+    ):
+      assert torch.isfinite(values).all()
+
+  try:
+    env.reset(seed=0)
+    assert_current_reset_is_bounded()
+    env.reset()
+    assert_current_reset_is_bounded()
   finally:
     env.close()

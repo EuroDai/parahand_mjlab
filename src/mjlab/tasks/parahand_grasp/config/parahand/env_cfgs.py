@@ -225,6 +225,7 @@ def parahand_only_grasp_object_env_cfg(
       "reset_table_height",
       "reset_object_pose",
       "reset_robot_joints",
+      "reset_teacher_physics",
     )
   }
 

@@ -8,6 +8,7 @@ import numpy as np
 import torch
 
 from mjlab.entity import Entity
+from mjlab.envs.mdp import dr
 from mjlab.envs.mdp.events import reset_joints_by_offset
 from mjlab.managers.event_manager import RecomputeLevel
 from mjlab.managers.scene_entity_config import SceneEntityCfg
@@ -20,16 +21,25 @@ from mjlab.utils.lab_api.math import (
 from ._table import get_table_heights
 from .actions import RelativeTendonLengthAction, apply_mcp_1_constraints
 from .consts import (
+  ACTUATOR_EFFORT_FACTOR_RANGE,
+  ACTUATOR_GAIN_FACTOR_RANGE,
   BOX_SCALE_RANGE,
   CAPSULE_SCALE_RANGE,
+  GRAVITY_MAGNITUDE_FACTOR_RANGE,
+  GRAVITY_TILT_MAX_RAD,
+  JOINT_DAMPING_FACTOR_RANGE,
+  OBJECT_COM_OFFSET_MAX_M,
+  OBJECT_DENSITY_FACTOR_RANGE,
+  OBJECT_FRICTION_FACTOR_RANGE,
   ORIENTATION_RANDOMIZATION_STAGE,
   PALM_TRACKING_LAST_STAGE,
   PRIMITIVE_DATASET_STAGE,
   PRIMITIVE_OBJECTS,
   SPHERE_SCALE_RANGE,
-  THREE_PRIMITIVE_STAGE,
+  TABLE_FRICTION_FACTOR_RANGE,
   primitive_gravity_fraction,
   primitive_randomization_fraction,
+  primitive_shape_probabilities,
 )
 
 if TYPE_CHECKING:
@@ -41,7 +51,7 @@ _INACTIVE_SIZE = 1.0e-6
 _CAPSULE = 0
 _BOX = 1
 _SPHERE = 2
-_SIZE_REFRESH_INTERVALS = {1: 16, 2: 16, 3: 4, 4: 2, 5: 2}
+_SIZE_REFRESH_INTERVALS = {3: 16, 4: 4, 5: 2, 6: 2}
 _PALM_JOINT_NAMES = (
   "palm_translation_x",
   "palm_translation_y",
@@ -150,23 +160,30 @@ def _intrinsic_xyz_from_matrix(rotation: torch.Tensor) -> torch.Tensor:
   return torch.stack((roll, pitch, yaw), dim=-1)
 
 
-def reset_joints_by_curriculum(
-  env: ManagerBasedRlEnv,
-  env_ids: torch.Tensor,
-  position_range: tuple[float, float],
-  velocity_range: tuple[float, float],
-  asset_cfg: SceneEntityCfg,
-  curriculum_stage: int,
-) -> None:
-  """Reset active joints using the range selected by the curriculum."""
-  del curriculum_stage
-  reset_joints_by_offset(
-    env,
-    env_ids,
-    position_range=position_range,
-    velocity_range=velocity_range,
-    asset_cfg=asset_cfg,
-  )
+class reset_joints_by_curriculum:
+  """Reset active joints using the curriculum-selected range."""
+
+  def __init__(self, cfg: EventTermCfg, env: ManagerBasedRlEnv):
+    del cfg, env
+
+  def __call__(
+    self,
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor,
+    position_range: tuple[float, float],
+    velocity_range: tuple[float, float],
+    asset_cfg: SceneEntityCfg,
+    curriculum_stage: int,
+  ) -> None:
+    """Reset active joints using the range selected by the curriculum."""
+    del curriculum_stage
+    reset_joints_by_offset(
+      env,
+      env_ids,
+      position_range=position_range,
+      velocity_range=velocity_range,
+      asset_cfg=asset_cfg,
+    )
 
 
 def reset_gravity_by_curriculum(
@@ -185,6 +202,169 @@ def reset_gravity_by_curriculum(
   env.sim.model.opt.gravity[env_ids] = gravity_w * primitive_gravity_fraction(
     curriculum_stage
   )
+
+
+def _curriculum_scale_range(
+  value_range: tuple[float, float], fraction: float
+) -> tuple[float, float]:
+  """Interpolate a multiplicative randomization range from the identity."""
+  return (
+    1.0 + fraction * (value_range[0] - 1.0),
+    1.0 + fraction * (value_range[1] - 1.0),
+  )
+
+
+class randomize_teacher_physics:
+  """Apply curriculum-scaled physical domain randomization at episode reset."""
+
+  model_fields = (
+    "body_mass",
+    "body_ipos",
+    "body_inertia",
+    "geom_friction",
+    "dof_damping",
+    "actuator_gainprm",
+    "actuator_biasprm",
+    "actuator_forcerange",
+    "jnt_actfrcrange",
+    "tendon_actfrcrange",
+    *_CACHED_DERIVED_FIELDS,
+  )
+  recompute = RecomputeLevel.set_const
+
+  def __init__(self, cfg: EventTermCfg, env: ManagerBasedRlEnv):
+    object_cfg = cfg.params["object_cfg"]
+    self._object: Entity = env.scene[object_cfg.name]
+    self._object_body_id = int(self._object.indexing.body_ids[0].item())
+    self._object_is_variant = self._object.variant_metadata is not None
+
+    model = env.sim.model
+    self._nominal_object_mass = model.body_mass[:, self._object_body_id].clone()
+    self._nominal_object_ipos = model.body_ipos[:, self._object_body_id].clone()
+    self._nominal_object_inertia = model.body_inertia[:, self._object_body_id].clone()
+
+  def __call__(
+    self,
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor,
+    object_cfg: SceneEntityCfg,
+    table_cfg: SceneEntityCfg,
+    robot_cfg: SceneEntityCfg,
+    gravity: tuple[float, float, float],
+    curriculum_stage: int,
+  ) -> None:
+    """Randomize physical parameters without accumulating across resets."""
+    env_ids = env_ids.to(device=env.device, dtype=torch.long)
+    fraction = primitive_randomization_fraction(curriculum_stage)
+    model = env.sim.model
+
+    if self._object_is_variant:
+      base_mass = self._nominal_object_mass[env_ids]
+      base_ipos = self._nominal_object_ipos[env_ids]
+      base_inertia = self._nominal_object_inertia[env_ids]
+    else:
+      # The primitive reset immediately before this event writes the shape-specific
+      # nominal mass, COM, and inertia for the current sampled dimensions.
+      base_mass = model.body_mass[env_ids, self._object_body_id].clone()
+      base_ipos = model.body_ipos[env_ids, self._object_body_id].clone()
+      base_inertia = model.body_inertia[env_ids, self._object_body_id].clone()
+
+    density_range = _curriculum_scale_range(OBJECT_DENSITY_FACTOR_RANGE, fraction)
+    density_factor = torch.empty(
+      len(env_ids), device=env.device, dtype=base_mass.dtype
+    ).uniform_(*density_range)
+    com_offset = torch.empty(
+      len(env_ids), 3, device=env.device, dtype=base_ipos.dtype
+    ).uniform_(
+      -OBJECT_COM_OFFSET_MAX_M * fraction,
+      OBJECT_COM_OFFSET_MAX_M * fraction,
+    )
+    model.body_mass[env_ids, self._object_body_id] = base_mass * density_factor
+    model.body_inertia[env_ids, self._object_body_id] = (
+      base_inertia * density_factor[:, None]
+    )
+    model.body_ipos[env_ids, self._object_body_id] = base_ipos + com_offset
+
+    dr.geom_friction(
+      env,
+      env_ids,
+      ranges=_curriculum_scale_range(OBJECT_FRICTION_FACTOR_RANGE, fraction),
+      asset_cfg=object_cfg,
+      operation="scale",
+      axes=[0, 1, 2],
+      shared_random=True,
+    )
+    dr.geom_friction(
+      env,
+      env_ids,
+      ranges=_curriculum_scale_range(TABLE_FRICTION_FACTOR_RANGE, fraction),
+      asset_cfg=table_cfg,
+      operation="scale",
+      axes=[0, 1, 2],
+      shared_random=True,
+    )
+    dr.joint_damping(
+      env,
+      env_ids,
+      ranges=_curriculum_scale_range(JOINT_DAMPING_FACTOR_RANGE, fraction),
+      asset_cfg=robot_cfg,
+      operation="scale",
+      shared_random=True,
+    )
+    gain_range = _curriculum_scale_range(ACTUATOR_GAIN_FACTOR_RANGE, fraction)
+    dr.pd_gains(
+      env,
+      env_ids,
+      kp_range=gain_range,
+      kd_range=gain_range,
+      asset_cfg=robot_cfg,
+      operation="scale",
+    )
+    dr.effort_limits(
+      env,
+      env_ids,
+      effort_limit_range=_curriculum_scale_range(
+        ACTUATOR_EFFORT_FACTOR_RANGE, fraction
+      ),
+      asset_cfg=robot_cfg,
+      operation="scale",
+    )
+
+    base_gravity = torch.tensor(
+      gravity,
+      device=env.device,
+      dtype=model.opt.gravity.dtype,
+    )
+    gravity_fraction = primitive_gravity_fraction(curriculum_stage)
+    magnitude_factor = torch.empty(
+      len(env_ids), device=env.device, dtype=base_gravity.dtype
+    ).uniform_(*_curriculum_scale_range(GRAVITY_MAGNITUDE_FACTOR_RANGE, fraction))
+    tilt_radius = (
+      torch.rand(len(env_ids), device=env.device, dtype=base_gravity.dtype).sqrt()
+      * GRAVITY_TILT_MAX_RAD
+      * fraction
+    )
+    tilt_azimuth = (
+      torch.rand(len(env_ids), device=env.device, dtype=base_gravity.dtype)
+      * 2.0
+      * math.pi
+    )
+    tilt = torch.stack(
+      (
+        tilt_radius * torch.cos(tilt_azimuth),
+        tilt_radius * torch.sin(tilt_azimuth),
+      ),
+      dim=-1,
+    )
+    zero = torch.zeros(len(env_ids), device=env.device, dtype=base_gravity.dtype)
+    gravity_quat = quat_from_euler_xyz(tilt[:, 0], tilt[:, 1], zero)
+    gravity_w = (
+      base_gravity.expand(len(env_ids), -1)
+      * gravity_fraction
+      * magnitude_factor[:, None]
+    )
+    gravity_w = quat_apply(gravity_quat, gravity_w)
+    model.opt.gravity[env_ids] = gravity_w
 
 
 class reset_table_height:
@@ -389,7 +569,6 @@ class reset_joints_above_table:
       joint_limits,
       self._mcp_1_active_columns,
     )
-
     joint_velocity = default_joint_vel[
       env_ids[:, None], self._active_joint_ids[None, :]
     ].clone()
@@ -692,14 +871,12 @@ class reset_primitive_object_pose:
     if stage != self._random_stage:
       self._random_stage = stage
       self._random_reset_count = 0
-    if stage < THREE_PRIMITIVE_STAGE:
-      self.shape_ids[env_ids] = _BOX
-    else:
-      self.shape_ids[env_ids] = torch.randint(
-        len(PRIMITIVE_OBJECTS), (len(env_ids),), device=env.device
-      )
-    refresh_interval = _SIZE_REFRESH_INTERVALS[stage]
-    periodic_refresh = self._random_reset_count % refresh_interval == 0
+    self.shape_ids[env_ids] = self._sample_shape_ids(len(env_ids), stage, env.device)
+    fraction = primitive_randomization_fraction(stage)
+    periodic_refresh = False
+    if fraction > 0.0:
+      refresh_interval = _SIZE_REFRESH_INTERVALS[stage]
+      periodic_refresh = self._random_reset_count % refresh_interval == 0
     invalid = self._slot_cache_stage[env_ids] != stage
     refresh_env_ids = env_ids if periodic_refresh else env_ids[invalid]
     if len(refresh_env_ids) > 0:
@@ -715,8 +892,10 @@ class reset_primitive_object_pose:
     stage: int,
   ) -> None:
     selected_shape_ids = self.shape_ids[env_ids].clone()
-    shape_ids = (
-      (_BOX,) if stage < THREE_PRIMITIVE_STAGE else range(len(PRIMITIVE_OBJECTS))
+    shape_ids = tuple(
+      shape_id
+      for shape_id, probability in enumerate(primitive_shape_probabilities(stage))
+      if probability > 0.0
     )
     for shape_id in shape_ids:
       self.shape_ids[env_ids] = shape_id
@@ -749,14 +928,23 @@ class reset_primitive_object_pose:
       self.shape_ids[env_ids] = _BOX
       self.sizes[env_ids] = self._base_sizes[_BOX]
       return
-    if stage < THREE_PRIMITIVE_STAGE:
-      self.shape_ids[env_ids] = _BOX
-      self.sizes[env_ids] = self._sample_sizes(self.shape_ids[env_ids], stage)
-      return
 
-    shape_ids = torch.randint(len(PRIMITIVE_OBJECTS), (count,), device=env_ids.device)
+    shape_ids = self._sample_shape_ids(count, stage, env_ids.device)
     self.shape_ids[env_ids] = shape_ids
     self.sizes[env_ids] = self._sample_sizes(shape_ids, stage)
+
+  @staticmethod
+  def _sample_shape_ids(
+    count: int,
+    stage: int,
+    device: torch.device | str,
+  ) -> torch.Tensor:
+    probabilities = torch.tensor(
+      primitive_shape_probabilities(stage),
+      device=device,
+      dtype=torch.float32,
+    )
+    return torch.multinomial(probabilities, count, replacement=True)
 
   def _sample_sizes(
     self,

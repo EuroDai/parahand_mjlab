@@ -20,9 +20,11 @@ from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.tasks.parahand_grasp import mdp as parahand_mdp
 from mjlab.tasks.parahand_grasp.mdp.actions import RelativeTendonLengthActionCfg
 from mjlab.tasks.parahand_grasp.mdp.consts import (
+  POINT_CLOUD_NOISE_STD_MAX_M,
   PRIMITIVE_DATASET_STAGE,
   primitive_randomization_fraction,
 )
+from mjlab.utils.noise import GaussianNoiseCfg
 
 _EXPECTED_FORMAT_VERSION = 1
 _EXPECTED_SCALE_MODE = "unit_sphere_runtime_cfg"
@@ -49,6 +51,7 @@ def apply_primitive_stage_randomization(
   cfg.events[params["event_name"]].params["curriculum_stage"] = stage
   cfg.events[params["table_event_name"]].params["curriculum_stage"] = stage
   cfg.events[params["gravity_event_name"]].params["curriculum_stage"] = stage
+  cfg.events[params["physics_event_name"]].params["curriculum_stage"] = stage
 
   fraction = primitive_randomization_fraction(stage)
   robot_event_cfg = cfg.events[params["robot_event_name"]]
@@ -72,6 +75,17 @@ def apply_primitive_stage_randomization(
   tendon_cfg.reset_target_range = (
     -0.05 * fraction,
     0.05 * fraction,
+  )
+  point_cloud_cfg = cfg.observations["actor"].terms["object_point_cloud_b"]
+  if point_cloud_cfg.noise is not None and not isinstance(
+    point_cloud_cfg.noise, GaussianNoiseCfg
+  ):
+    raise TypeError("Primitive randomization requires Gaussian point-cloud noise.")
+  point_cloud_noise_std = POINT_CLOUD_NOISE_STD_MAX_M * fraction
+  point_cloud_cfg.noise = (
+    GaussianNoiseCfg(mean=0.0, std=point_cloud_noise_std)
+    if point_cloud_noise_std > 0.0
+    else None
   )
 
 
@@ -313,10 +327,10 @@ def make_dfc_variant_spec(variant: DfcVariant) -> mujoco.MjSpec:
       group=0,
       density=_DENSITY,
       rgba=(0.75, 0.75, 0.75, 0.0),
-      friction=(1.0, 0.1, 0.002),
+      friction=(1.0, 0.002, 0.0001),
       condim=4,
-      solref=(0.02, 1.0),
-      solimp=(0.95, 0.99, 0.001, 0.5, 2.0),
+      solref=(0.01, 1.0),
+      solimp=(0.9, 0.95, 0.001, 0.5, 2.0),
       contype=2_097_152,
       conaffinity=2_097_151,
     )
@@ -427,7 +441,7 @@ def make_dataset_train_env_cfg(
   position_noise: tuple[float, float],
   clearance: float,
 ) -> ManagerBasedRlEnvCfg:
-  """Create a Stage 6 environment for one fixed mesh shard."""
+  """Create a Stage 7 environment for one fixed mesh shard."""
   if drop_height_range[0] < 0.0 or drop_height_range[1] < drop_height_range[0]:
     raise ValueError("drop_height_range must be non-negative and ordered.")
   if clearance < 0.0:
@@ -441,7 +455,7 @@ def make_dataset_train_env_cfg(
     init_pos=original_object_cfg.init_state.pos,
   )
   cfg.curriculum = {}
-  # Stage 6 keeps thousands of worlds resident, so use a smaller per-world
+  # Stage 7 keeps thousands of worlds resident, so use a smaller per-world
   # contact budget than the 78-world evaluator while retaining headroom for
   # decomposed collision parts touching the floor and hand simultaneously.
   cfg.sim.nconmax = max(cfg.sim.nconmax or 0, 256)

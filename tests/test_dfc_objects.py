@@ -51,10 +51,11 @@ from mjlab.tasks.parahand_grasp.rl.runner import (
 
 
 def _assert_final_primitive_randomization(cfg) -> None:
-  assert cfg.events["reset_gravity"].params["curriculum_stage"] == 5
-  assert cfg.events["reset_table_height"].params["curriculum_stage"] == 5
+  assert cfg.events["reset_gravity"].params["curriculum_stage"] == 6
+  assert cfg.events["reset_table_height"].params["curriculum_stage"] == 6
+  assert cfg.events["reset_teacher_physics"].params["curriculum_stage"] == 6
   robot_cfg = cfg.events["reset_robot_joints"].params
-  assert robot_cfg["curriculum_stage"] == 5
+  assert robot_cfg["curriculum_stage"] == 6
   assert robot_cfg["position_range"] == (-0.5, 0.5)
   assert robot_cfg["palm_height_range"] == pytest.approx((0.2, 0.4))
   assert robot_cfg["palm_joint_ranges"] == {
@@ -152,6 +153,11 @@ def test_dfc_variant_spec_applies_runtime_scale(dfc_dataset: Path):
   assert small_model.ngeom == 2
   assert large_model.geom_rbound[0] == pytest.approx(small_model.geom_rbound[0] * 2.0)
   assert large_model.body_mass[1] == pytest.approx(small_model.body_mass[1] * 8.0)
+  assert small_model.geom_friction[1].tolist() == pytest.approx([1.0, 0.002, 0.0001])
+  assert small_model.geom_solref[1].tolist() == pytest.approx([0.01, 1.0])
+  assert small_model.geom_solimp[1].tolist() == pytest.approx(
+    [0.9, 0.95, 0.001, 0.5, 2.0]
+  )
 
 
 def test_observation_deterministically_reduces_preprocessed_cloud(
@@ -315,7 +321,7 @@ def test_play_stage_two_builds_configured_dataset_environment(dfc_dataset: Path)
   reset_cfg = stage2_cfg.events["reset_object_pose"]
   assert reset_cfg.func.__name__ == "reset_dropped_mesh_object_pose"
   assert reset_cfg.params["drop_height_range"] == (0.10, 0.15)
-  assert stage2_cfg.events["reset_gravity"].params["curriculum_stage"] == 5
+  assert stage2_cfg.events["reset_gravity"].params["curriculum_stage"] == 6
   assert stage2_cfg.curriculum == {}
   _assert_final_primitive_randomization(stage2_cfg)
 
@@ -357,10 +363,21 @@ def test_play_disables_training_time_unseen_evaluator():
   assert agent_cfg.unseen_eval is True
 
 
-def test_train_curriculum_stage_six_enables_dataset_stage():
+def test_train_curriculum_stage_six_keeps_final_primitive_stage():
   env_cfg = parahand_only_grasp_object_env_cfg()
   agent_cfg = parahand_only_grasp_object_ppo_runner_cfg()
   cfg = TrainConfig(env=env_cfg, agent=agent_cfg, curriculum_stage=6)
+
+  _prepare_training_curriculum_stage(cfg)
+
+  assert agent_cfg.stage2_start_immediately is False
+  _assert_final_primitive_randomization(env_cfg)
+
+
+def test_train_curriculum_stage_seven_enables_dataset_stage():
+  env_cfg = parahand_only_grasp_object_env_cfg()
+  agent_cfg = parahand_only_grasp_object_ppo_runner_cfg()
+  cfg = TrainConfig(env=env_cfg, agent=agent_cfg, curriculum_stage=7)
 
   _prepare_training_curriculum_stage(cfg)
 
@@ -376,9 +393,9 @@ def test_train_curriculum_stage_sets_live_curriculum_term():
   )
   env = SimpleNamespace(curriculum_manager=manager)
 
-  _set_training_curriculum_stage(cast(Any, env), 6)
+  _set_training_curriculum_stage(cast(Any, env), 7)
 
-  term.set_stage.assert_called_once_with(6)
+  term.set_stage.assert_called_once_with(7)
 
 
 def test_fixed_eval_rng_restores_training_rng():
@@ -403,8 +420,8 @@ def test_runner_logs_only_unseen_success_rate():
   writer = Mock()
   runner._unseen_evaluator = evaluator
   runner._unseen_eval_interval = 300
-  runner._unseen_eval_start_stage = 2
-  runner._logical_curriculum_stage = Mock(return_value=2)
+  runner._unseen_eval_start_stage = 3
+  runner._logical_curriculum_stage = Mock(return_value=3)
   runner.logger = cast(Any, SimpleNamespace(writer=writer))
   runner._training_log = Mock()
 
@@ -428,14 +445,14 @@ def test_runner_logs_only_unseen_success_rate():
   runner._training_log.assert_called_once()
 
 
-def test_runner_skips_unseen_success_before_curriculum_stage_two():
+def test_runner_skips_unseen_success_before_curriculum_stage_three():
   runner = ParaHandOnPolicyRunner.__new__(ParaHandOnPolicyRunner)
   evaluator = Mock()
   writer = Mock()
   runner._unseen_evaluator = evaluator
   runner._unseen_eval_interval = 300
-  runner._unseen_eval_start_stage = 2
-  runner._logical_curriculum_stage = Mock(return_value=1)
+  runner._unseen_eval_start_stage = 3
+  runner._logical_curriculum_stage = Mock(return_value=2)
   runner.logger = cast(Any, SimpleNamespace(writer=writer))
   runner._training_log = Mock()
 
