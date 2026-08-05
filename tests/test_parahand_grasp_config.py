@@ -173,6 +173,11 @@ def test_object_curriculum_uses_continuously_randomized_primitives():
     "object_name": "object"
   }
   assert "object_quaternion_b" in cfg.observations["critic"].terms
+  assert cfg.observations["actor"].nan_policy == "warn"
+  assert cfg.observations["actor"].nan_check_per_term is True
+  assert cfg.observations["critic"].nan_policy == "warn"
+  assert cfg.observations["critic"].nan_check_per_term is True
+  assert cfg.non_finite_reset_attempts == 2
   table_reset_cfg = cfg.events["reset_table_height"]
   assert table_reset_cfg.params["height_range"] == (0.6, 1.0)
   assert table_reset_cfg.params["robot_base_follows_table"] is False
@@ -187,6 +192,7 @@ def test_object_curriculum_uses_continuously_randomized_primitives():
     "z_lower_offset": -0.05,
     "z_upper_offset": 2.0,
   }
+  assert cfg.terminations["non_finite_state"].func.__name__ == "nan_detection"
   reset_joints_cfg = cfg.events["reset_robot_joints"]
   assert reset_joints_cfg.func.__name__ == "reset_joints_by_curriculum"
   assert reset_joints_cfg.params["position_range"] == (-0.05, 0.05)

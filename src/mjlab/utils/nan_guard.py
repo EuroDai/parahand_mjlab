@@ -1,5 +1,6 @@
 """Lightweight NaN guard for capturing simulation states when NaN/Inf detected."""
 
+import os
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -21,6 +22,10 @@ class NanGuardCfg:
   buffer_size: int = 100
   output_dir: str = "/tmp/mjlab/nan_dumps"
   max_envs_to_dump: int = 5
+  dump_cooldown_steps: int = 10_000
+  """Minimum physics steps between dumps while non-finite values persist."""
+  max_dumps: int = 10
+  """Maximum number of dumps per simulation process."""
 
 
 class NanGuard:
@@ -41,9 +46,12 @@ class NanGuard:
     self.buffer_size = cfg.buffer_size
     self.output_dir = Path(cfg.output_dir)
     self.max_envs_to_dump = cfg.max_envs_to_dump
+    self.dump_cooldown_steps = cfg.dump_cooldown_steps
+    self.max_dumps = cfg.max_dumps
     self.buffer: deque = deque(maxlen=self.buffer_size)
     self.step_counter = 0
-    self._dumped = False
+    self._dump_count = 0
+    self._last_dump_step = -self.dump_cooldown_steps
 
     self.state_spec = mujoco.mjtState.mjSTATE_PHYSICS.value
     if mj_model.nmocap > 0:
@@ -87,8 +95,16 @@ class NanGuard:
     self.check_and_dump(wp_data)
 
   @staticmethod
-  def detect_nans(data: mjwarp.Data) -> torch.Tensor:
-    """Detect NaN/Inf values in physics state (qpos, qvel, qacc, qacc_warmstart).
+  def detect_non_finite_fields(data: mjwarp.Data) -> dict[str, torch.Tensor]:
+    """Return per-environment non-finite masks for each physics-state field."""
+    return {
+      name: ~torch.isfinite(getattr(data, name)).all(dim=-1)
+      for name in ("qpos", "qvel", "qacc", "qacc_warmstart", "sensordata")
+    }
+
+  @classmethod
+  def detect_nans(cls, data: mjwarp.Data) -> torch.Tensor:
+    """Detect NaN/Inf values in the complete watched physics state.
 
     Args:
       data: MuJoCo simulation data containing physics state.
@@ -96,48 +112,58 @@ class NanGuard:
     Returns:
       Boolean tensor where True indicates environments with NaN/Inf values.
     """
-    tensors_to_check = [
-      data.qpos,
-      data.qvel,
-      data.qacc,
-      data.qacc_warmstart,
-      data.sensordata,
-    ]
-
-    # Build per-env NaN mask (True if env has NaN/Inf in any tensor).
     nan_mask = torch.zeros(
       data.qpos.shape[0], dtype=torch.bool, device=data.qpos.device
     )
-    for t in tensors_to_check:
-      nan_mask |= torch.isnan(t).any(dim=-1) | torch.isinf(t).any(dim=-1)
-
+    for field_mask in cls.detect_non_finite_fields(data).values():
+      nan_mask |= field_mask
     return nan_mask
 
   def check_and_dump(self, data: mjwarp.Data) -> bool:
     """Check for NaN/Inf and dump buffer if detected.
 
     Returns:
-      True if NaN/Inf detected and dump occurred, False otherwise.
+      True if NaN/Inf was detected, even if dump rate limiting suppressed the dump.
     """
-    if not self.enabled or self._dumped:
+    if not self.enabled:
       return False
 
-    nan_mask = self.detect_nans(data)
+    field_masks = self.detect_non_finite_fields(data)
+    nan_mask = torch.zeros(
+      data.qpos.shape[0], dtype=torch.bool, device=data.qpos.device
+    )
+    for field_mask in field_masks.values():
+      nan_mask |= field_mask
 
     if nan_mask.any():
-      nan_env_ids = torch.where(nan_mask)[0].cpu().numpy().tolist()
-      self._dump_buffer(nan_env_ids)
-      self._dumped = True
+      cooldown_elapsed = (
+        self.step_counter - self._last_dump_step >= self.dump_cooldown_steps
+      )
+      if self._dump_count < self.max_dumps and cooldown_elapsed:
+        nan_env_ids = torch.where(nan_mask)[0].cpu().numpy().tolist()
+        non_finite_fields = {
+          name: torch.where(mask)[0].cpu().numpy().tolist()
+          for name, mask in field_masks.items()
+          if mask.any()
+        }
+        self._dump_buffer(nan_env_ids, non_finite_fields)
+        self._dump_count += 1
+        self._last_dump_step = self.step_counter
       return True
 
     return False
 
-  def _dump_buffer(self, nan_env_ids: list[int]) -> None:
+  def _dump_buffer(
+    self,
+    nan_env_ids: list[int],
+    non_finite_fields: dict[str, list[int]],
+  ) -> None:
     """Write buffered states to disk."""
     self.output_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = self.output_dir / f"nan_dump_{timestamp}.npz"
-    model_filename = self.output_dir / f"model_{timestamp}.mjb"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    suffix = f"{timestamp}_pid{os.getpid()}_{self._dump_count + 1:03d}"
+    filename = self.output_dir / f"nan_dump_{suffix}.npz"
+    model_filename = self.output_dir / f"model_{suffix}.mjb"
 
     envs_to_dump = nan_env_ids[: self.max_envs_to_dump]
     data = {}
@@ -168,7 +194,9 @@ class NanGuard:
         "num_envs_total": self.num_envs,
         "num_envs_dumped": len(envs_to_dump),
         "nan_env_ids": nan_env_ids,
+        "non_finite_fields": non_finite_fields,
         "dumped_env_ids": list(envs_to_dump),
+        "dump_index": self._dump_count + 1,
         "state_spec": self.state_spec,
         "state_size": self.state_size,
         "buffer_size": len(self.buffer),
@@ -185,17 +213,24 @@ class NanGuard:
     np.savez_compressed(filename, **data)
     mujoco.mj_saveModel(self.mj_model, str(model_filename), None)
 
-    # Create symlinks to latest dumps
+    # Replace symlinks atomically so multiple ranks cannot leave a broken link.
     latest_dump = self.output_dir / "nan_dump_latest.npz"
     latest_model = self.output_dir / "model_latest.mjb"
-    latest_dump.unlink(missing_ok=True)
-    latest_model.unlink(missing_ok=True)
-    latest_dump.symlink_to(filename.name)
-    latest_model.symlink_to(model_filename.name)
+    self._replace_symlink(latest_dump, filename.name)
+    self._replace_symlink(latest_model, model_filename.name)
 
-    print(f"[NanGuard] Detected NaN/Inf at step {self.step_counter}")
-    print(f"[NanGuard] NaN/Inf found in envs: {nan_env_ids[:10]}...")
-    print(f"[NanGuard] Dumping {len(envs_to_dump)} envs: {envs_to_dump}")
-    print(f"[NanGuard] Dumped {len(self.buffer)} states to: {filename}")
-    print(f"[NanGuard] Saved model to: {model_filename}")
-    print(f"[NanGuard] Latest dump symlinked at: {latest_dump}")
+    print(
+      f"[NanGuard] Detected NaN/Inf at step {self.step_counter}: {non_finite_fields}",
+      flush=True,
+    )
+    print(f"[NanGuard] NaN/Inf found in envs: {nan_env_ids[:10]}...", flush=True)
+    print(f"[NanGuard] Dumping {len(envs_to_dump)} envs: {envs_to_dump}", flush=True)
+    print(f"[NanGuard] Dumped {len(self.buffer)} states to: {filename}", flush=True)
+    print(f"[NanGuard] Saved model to: {model_filename}", flush=True)
+    print(f"[NanGuard] Latest dump symlinked at: {latest_dump}", flush=True)
+
+  def _replace_symlink(self, link: Path, target: str) -> None:
+    temporary_link = link.with_name(f".{link.name}.{os.getpid()}")
+    temporary_link.unlink(missing_ok=True)
+    temporary_link.symlink_to(target)
+    temporary_link.replace(link)

@@ -41,6 +41,7 @@ from mjlab.sim import SimulationCfg
 from mjlab.sim.sim import Simulation
 from mjlab.utils import random as random_utils
 from mjlab.utils.logging import print_info
+from mjlab.utils.nan_guard import NanGuard
 from mjlab.utils.spaces import Box
 from mjlab.utils.spaces import Dict as DictSpace
 from mjlab.viewer.debug_visualizer import DebugVisualizer
@@ -152,6 +153,15 @@ class ManagerBasedRlEnvCfg:
   Note: mjlab's bundled ``train.py`` goes through rsl_rl's ``OnPolicyRunner``, which
   does not drive manual resets. ``auto_reset=False`` is intended for users running
   their own training loop (or a wrapper that handles the reset between steps).
+  """
+
+  non_finite_reset_attempts: int = 0
+  """Number of retries for reset environments whose physics state remains non-finite.
+
+  Each retry resets only the affected environments, refreshes derived simulation
+  state, and validates ``qpos``, ``qvel``, ``qacc``, ``qacc_warmstart``, and sensor
+  data again. A ``RuntimeError`` is raised if the state is still invalid after all
+  retries. Set to zero to disable post-reset validation.
   """
 
   scale_rewards_by_dt: bool = True
@@ -371,6 +381,7 @@ class ManagerBasedRlEnv:
     self.sim.forward()
     self.command_manager.compute(dt=0.0)
     self.sim.sense()
+    self._recover_non_finite_reset_state(env_ids)
     self.obs_buf = self.observation_manager.compute(update_history=True)
     self.recorder_manager.record_post_reset(env_ids)
     return self.obs_buf, self.extras
@@ -461,6 +472,8 @@ class ManagerBasedRlEnv:
       self.event_manager.apply(mode="interval", dt=self.step_dt)
 
     self.sim.sense()
+    if self.cfg.auto_reset and len(reset_env_ids) > 0:
+      self._recover_non_finite_reset_state(reset_env_ids)
     self.obs_buf = self.observation_manager.compute(update_history=True)
 
     if self.cfg.auto_reset and len(reset_env_ids) > 0:
@@ -519,6 +532,45 @@ class ManagerBasedRlEnv:
 
   # Private methods.
 
+  def _recover_non_finite_reset_state(self, env_ids: torch.Tensor) -> None:
+    """Retry only reset environments whose refreshed physics state is invalid."""
+    attempts = self.cfg.non_finite_reset_attempts
+    if attempts <= 0 or len(env_ids) == 0:
+      return
+
+    for attempt in range(attempts + 1):
+      field_masks = NanGuard.detect_non_finite_fields(self.sim.data)
+      invalid_mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+      for field_mask in field_masks.values():
+        invalid_mask |= field_mask
+      invalid_env_ids = env_ids[invalid_mask[env_ids]]
+      if len(invalid_env_ids) == 0:
+        return
+
+      details = {
+        name: env_ids[mask[env_ids]].cpu().tolist()
+        for name, mask in field_masks.items()
+        if torch.any(mask[env_ids])
+      }
+      if attempt == attempts:
+        raise RuntimeError(
+          "Reset produced non-finite simulation state after "
+          f"{attempts} retries: {details}"
+        )
+
+      print_info(
+        "[WARN] Reset produced non-finite simulation state; retrying "
+        f"envs {invalid_env_ids.cpu().tolist()} ({attempt + 1}/{attempts}): "
+        f"{details}"
+      )
+      episode_log = self.extras["log"].copy()
+      self._reset_idx(invalid_env_ids, is_retry=True)
+      self.extras["log"] = episode_log
+      self.scene.write_data_to_sim()
+      self.sim.forward()
+      self.command_manager.compute(dt=0.0)
+      self.sim.sense()
+
   def _configure_gym_env_spaces(self) -> None:
     from mjlab.utils.spaces import batch_space
 
@@ -550,8 +602,14 @@ class ManagerBasedRlEnv:
     self.observation_space = batch_space(self.single_observation_space, self.num_envs)
     self.action_space = batch_space(self.single_action_space, self.num_envs)
 
-  def _reset_idx(self, env_ids: torch.Tensor | None = None) -> None:
-    self.curriculum_manager.compute(env_ids=env_ids)
+  def _reset_idx(
+    self,
+    env_ids: torch.Tensor | None = None,
+    *,
+    is_retry: bool = False,
+  ) -> None:
+    if not is_retry:
+      self.curriculum_manager.compute(env_ids=env_ids)
     self.sim.reset(env_ids)
     self.scene.reset(env_ids)
 

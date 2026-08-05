@@ -405,6 +405,48 @@ class ParaHandOnPolicyRunner(ManipulationOnPolicyRunner):
     current = math.floor((self._stage2_update_count + 1) * ratio)
     return "primitive" if current > previous else "dataset"
 
+  def _synchronize_rollout_error(self, error: Exception | None) -> None:
+    """Raise a rollout error on every rank before collectives diverge."""
+    if not self.is_distributed:
+      if error is not None:
+        raise error
+      return
+
+    failed = torch.tensor(int(error is not None), dtype=torch.int32, device=self.device)
+    dist.all_reduce(failed, op=ReduceOp.MAX)
+    if not bool(failed.item()):
+      return
+    if error is not None:
+      raise RuntimeError(
+        f"Rollout failed on rank {self.gpu_global_rank}: {error}"
+      ) from error
+    raise RuntimeError(
+      "Rollout failed on another distributed rank; see that rank's log "
+      "for the original exception."
+    )
+
+  def _rollout_step(
+    self,
+    active_env: RslRlVecEnvWrapper,
+    obs: TensorDict,
+  ) -> tuple[TensorDict, torch.Tensor, torch.Tensor, dict]:
+    """Run one rollout step and synchronize recoverable failures across ranks."""
+    result: tuple[TensorDict, torch.Tensor, torch.Tensor, dict] | None = None
+    error: Exception | None = None
+    try:
+      actions = self.alg.act(obs)
+      next_obs, rewards, dones, extras = active_env.step(actions.to(active_env.device))
+      if self.cfg.get("check_for_nan", True):
+        check_nan(next_obs, rewards, dones)
+      result = (next_obs, rewards, dones, extras)
+    except Exception as exc:
+      error = exc
+
+    self._synchronize_rollout_error(error)
+    if result is None:
+      raise RuntimeError("Rollout failed without an exception.")
+    return result
+
   def _log_with_unseen_eval(
     self,
     it: int,
@@ -520,10 +562,7 @@ class ParaHandOnPolicyRunner(ManipulationOnPolicyRunner):
         start = time.time()
         with torch.inference_mode():
           for _ in range(self.cfg["num_steps_per_env"]):
-            actions = self.alg.act(obs)
-            obs, rewards, dones, extras = active_env.step(actions.to(active_env.device))
-            if self.cfg.get("check_for_nan", True):
-              check_nan(obs, rewards, dones)
+            obs, rewards, dones, extras = self._rollout_step(active_env, obs)
             obs, rewards, dones = (
               obs.to(self.device),
               rewards.to(self.device),

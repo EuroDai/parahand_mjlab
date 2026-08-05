@@ -475,3 +475,30 @@ def test_runner_stage2_update_schedule_preserves_primitive_quarter():
     "dataset",
     "primitive",
   ]
+
+
+def test_runner_preserves_single_rank_rollout_error():
+  runner = ParaHandOnPolicyRunner.__new__(ParaHandOnPolicyRunner)
+  runner.is_distributed = False
+
+  with pytest.raises(ValueError, match="actor observation contains NaN"):
+    runner._synchronize_rollout_error(ValueError("actor observation contains NaN"))
+
+
+def test_runner_propagates_remote_rollout_error(monkeypatch):
+  runner = ParaHandOnPolicyRunner.__new__(ParaHandOnPolicyRunner)
+  runner.is_distributed = True
+  runner.device = "cpu"
+  runner.gpu_global_rank = 0
+
+  def mark_remote_failure(failed, op):
+    del op
+    failed.fill_(1)
+
+  monkeypatch.setattr(
+    "mjlab.tasks.parahand_grasp.rl.runner.dist.all_reduce",
+    mark_remote_failure,
+  )
+
+  with pytest.raises(RuntimeError, match="another distributed rank"):
+    runner._synchronize_rollout_error(None)

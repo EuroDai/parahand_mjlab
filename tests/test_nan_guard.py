@@ -96,6 +96,7 @@ def test_nan_guard_captures_and_dumps_on_nan(simple_model):
     assert metadata["num_envs_total"] == 4
     assert metadata["num_envs_dumped"] == 1
     assert 1 in metadata["nan_env_ids"]
+    assert metadata["non_finite_fields"]["qpos"] == [1]
     assert metadata["buffer_size"] == 4
 
     # Check that states were captured.
@@ -142,6 +143,14 @@ def test_nan_guard_detects_correct_env_ids(simple_model):
     # Should detect exactly the environments with NaN/Inf.
     nan_env_ids = set(metadata["nan_env_ids"])
     assert nan_env_ids == {2, 5, 7}, f"Expected {{2, 5, 7}}, got {nan_env_ids}"
+    non_finite_fields = metadata["non_finite_fields"]
+    assert set(non_finite_fields) == {
+      "qpos",
+      "qvel",
+      "qacc",
+      "qacc_warmstart",
+    }
+    assert all(set(env_ids) == {2, 5, 7} for env_ids in non_finite_fields.values())
 
 
 def test_nan_guard_saves_model(simple_model):
@@ -232,33 +241,52 @@ def test_nan_guard_with_complex_model():
     assert not np.isnan(loaded_data.qpos).any()
 
 
-def test_nan_guard_only_dumps_once(simple_model):
-  """NaN guard should only dump once per training run."""
+def test_nan_guard_rate_limits_repeated_dumps(simple_model):
+  """NaN guard should dump again after cooldown, up to its configured limit."""
   with tempfile.TemporaryDirectory() as tmpdir:
     cfg = SimulationCfg(
-      nan_guard=NanGuardCfg(enabled=True, buffer_size=5, output_dir=tmpdir)
+      nan_guard=NanGuardCfg(
+        enabled=True,
+        buffer_size=5,
+        output_dir=tmpdir,
+        dump_cooldown_steps=2,
+        max_dumps=2,
+      )
     )
     sim = Simulation(num_envs=2, cfg=cfg, model=simple_model, device=get_test_device())
 
-    # Inject NaN.
     sim.data.qpos[0, 0] = float("nan")
     sim.step()
 
-    # Should have exactly one timestamped dump.
     dump_files = [
       f for f in Path(tmpdir).glob("nan_dump_*.npz") if "latest" not in f.name
     ]
     assert len(dump_files) == 1
 
-    # Inject another NaN.
-    sim.data.qpos[1, 0] = float("nan")
+    # Persistent non-finite state is suppressed until the cooldown elapses.
     sim.step()
-
-    # Should still have only one timestamped dump.
     dump_files = [
       f for f in Path(tmpdir).glob("nan_dump_*.npz") if "latest" not in f.name
     ]
     assert len(dump_files) == 1
+
+    sim.step()
+    dump_files = [
+      f for f in Path(tmpdir).glob("nan_dump_*.npz") if "latest" not in f.name
+    ]
+    assert len(dump_files) == 2
+
+    # The maximum prevents unbounded disk growth after later cooldowns.
+    sim.step()
+    sim.step()
+    dump_files = [
+      f for f in Path(tmpdir).glob("nan_dump_*.npz") if "latest" not in f.name
+    ]
+    assert len(dump_files) == 2
+
+    dump = np.load(Path(tmpdir) / "nan_dump_latest.npz", allow_pickle=True)
+    metadata = dump["_metadata"].item()
+    assert metadata["dump_index"] == 2
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="Likely bug on CPU MjWarp")

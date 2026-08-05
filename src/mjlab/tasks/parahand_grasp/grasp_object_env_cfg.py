@@ -195,12 +195,16 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
       enable_corruption=True,
       history_length=5,
       flatten_history_dim=False,
+      nan_policy="warn",
+      nan_check_per_term=True,
     ),
     "critic": ObservationGroupCfg(
       critic_terms,
       enable_corruption=False,
       history_length=5,
       flatten_history_dim=False,
+      nan_policy="warn",
+      nan_check_per_term=True,
     ),
   }
 
@@ -412,6 +416,7 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
         "z_upper_offset": 2.0,
       },
     ),
+    "non_finite_state": TerminationTermCfg(func=mdp.nan_detection),
     "abnormal_robot": TerminationTermCfg(
       func=parahand_mdp.abnormal_robot,
       params={"max_abs_qvel": 500.0},
@@ -474,4 +479,5 @@ def make_grasp_object_env_cfg() -> ManagerBasedRlEnvCfg:
     ),
     decimation=10,
     episode_length_s=20,
+    non_finite_reset_attempts=2,
   )

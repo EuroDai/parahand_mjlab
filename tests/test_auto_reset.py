@@ -1,5 +1,7 @@
 """Tests for the auto_reset config flag."""
 
+from unittest.mock import Mock
+
 import pytest
 import torch
 from conftest import get_test_device
@@ -42,6 +44,35 @@ def test_auto_reset_true_resets_done_envs(device):
 
   # Episode counter was reset to 0 for done envs.
   assert (env.episode_length_buf[done_ids] == 0).all()
+  env.close()
+
+
+def test_non_finite_reset_retries_only_affected_env(device, monkeypatch):
+  cfg = _make_cfg(auto_reset=True)
+  cfg.non_finite_reset_attempts = 1
+  env = ManagerBasedRlEnv(cfg=cfg, device=device)
+  env.reset()
+
+  reset_env_ids = []
+  original_reset_idx = env._reset_idx
+
+  def tracked_reset_idx(env_ids, *, is_retry=False):
+    reset_env_ids.append(env_ids.clone())
+    original_reset_idx(env_ids, is_retry=is_retry)
+
+  curriculum_compute = Mock(wraps=env.curriculum_manager.compute)
+  monkeypatch.setattr(env, "_reset_idx", tracked_reset_idx)
+  monkeypatch.setattr(env.curriculum_manager, "compute", curriculum_compute)
+
+  checked_env_ids = torch.tensor([0, 1], device=env.device)
+  env.sim.data.qpos[1, 0] = float("nan")
+  env._recover_non_finite_reset_state(checked_env_ids)
+
+  assert len(reset_env_ids) == 1
+  assert reset_env_ids[0].cpu().tolist() == [1]
+  curriculum_compute.assert_not_called()
+  for mask in env.sim.nan_guard.detect_non_finite_fields(env.sim.data).values():
+    assert not mask[1]
   env.close()
 
 

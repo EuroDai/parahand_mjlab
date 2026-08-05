@@ -166,6 +166,11 @@ Changed
 Fixed
 ^^^^^
 
+- Fixed ParaHand non-finite simulator states bypassing per-environment reset and
+  leaving other distributed ranks blocked in NCCL. Full physics-state termination,
+  post-reset validation and targeted retries, synchronized rollout failure
+  propagation, term-level observation sanitization, and repeatable field-aware
+  NaN dumps now keep failures contained and diagnosable.
 - Fixed ParaHand ``play`` constructing the training-only unseen evaluator after
   curriculum overrides had removed the evaluator's required ``object_lesson``
   configuration.
