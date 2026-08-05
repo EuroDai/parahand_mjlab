@@ -693,6 +693,11 @@ reward terms can show them all. Defaults to 20, preserving previous behavior.
 <section id="fixed">
 <h3>Fixed<a class="headerlink" href="#fixed" title="Link to this heading">#</a></h3>
 <ul class="simple">
+<li><p>Fixed ParaHand non-finite simulator states bypassing per-environment reset and
+leaving other distributed ranks blocked in NCCL. Full physics-state termination,
+post-reset validation and targeted retries, synchronized rollout failure
+propagation, term-level observation sanitization, and repeatable field-aware
+NaN dumps now keep failures contained and diagnosable.</p></li>
 <li><p>Fixed ParaHand <code class="docutils literal notranslate"><span class="pre">play</span></code> constructing the training-only unseen evaluator after
 curriculum overrides had removed the evaluator’s required <code class="docutils literal notranslate"><span class="pre">object_lesson</span></code>
 configuration.</p></li>
