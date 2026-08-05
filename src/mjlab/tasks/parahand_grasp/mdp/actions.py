@@ -111,6 +111,28 @@ class ParaHandRelativeJointPositionActionCfg(_ClippedActionCfg):
     return ParaHandRelativeJointPositionAction(self, env)
 
 
+def apply_mcp_1_constraints(
+  target: torch.Tensor,
+  limits: torch.Tensor,
+  joint_ids: tuple[int, int, int, int],
+) -> None:
+  """Enforce the ParaHand side-swing ordering within per-joint limits."""
+  index_id, middle_id, ring_id, little_id = joint_ids
+  middle_lower = torch.maximum(target[:, index_id], limits[:, middle_id, 0])
+  middle_upper = torch.minimum(target[:, little_id], limits[:, middle_id, 1])
+  target[:, middle_id] = torch.minimum(
+    torch.maximum(target[:, middle_id], middle_lower),
+    middle_upper,
+  )
+
+  ring_lower = torch.maximum(target[:, middle_id], limits[:, ring_id, 0])
+  ring_upper = torch.minimum(target[:, little_id], limits[:, ring_id, 1])
+  target[:, ring_id] = torch.minimum(
+    torch.maximum(target[:, ring_id], ring_lower),
+    ring_upper,
+  )
+
+
 class ParaHandRelativeJointPositionAction(_ClippedAction):
   """Persistent joint targets advanced by each policy action.
 
@@ -165,30 +187,15 @@ class ParaHandRelativeJointPositionAction(_ClippedAction):
     self._reset_target_ramp(env_ids)
 
   def _apply_mcp_1_constraints(self, target: torch.Tensor) -> None:
-    middle_lower = torch.maximum(
-      target[:, self._index_mcp_1_id],
-      self._ctrl_range[:, self._middle_mcp_1_id, 0],
-    )
-    middle_upper = torch.minimum(
-      target[:, self._little_mcp_1_id],
-      self._ctrl_range[:, self._middle_mcp_1_id, 1],
-    )
-    target[:, self._middle_mcp_1_id] = torch.minimum(
-      torch.maximum(target[:, self._middle_mcp_1_id], middle_lower),
-      middle_upper,
-    )
-
-    ring_lower = torch.maximum(
-      target[:, self._middle_mcp_1_id],
-      self._ctrl_range[:, self._ring_mcp_1_id, 0],
-    )
-    ring_upper = torch.minimum(
-      target[:, self._little_mcp_1_id],
-      self._ctrl_range[:, self._ring_mcp_1_id, 1],
-    )
-    target[:, self._ring_mcp_1_id] = torch.minimum(
-      torch.maximum(target[:, self._ring_mcp_1_id], ring_lower),
-      ring_upper,
+    apply_mcp_1_constraints(
+      target,
+      self._ctrl_range,
+      (
+        self._index_mcp_1_id,
+        self._middle_mcp_1_id,
+        self._ring_mcp_1_id,
+        self._little_mcp_1_id,
+      ),
     )
 
 
@@ -216,7 +223,24 @@ class RelativeTendonLengthAction(_ClippedAction):
     super().__init__(cfg, env)
     self._ctrl_range = self._actuator_ctrl_range()
     self._ctrl_target = self._entity.data.tendon_len[:, self.target_ids].clone()
+    self._reset_target_center = torch.full_like(self._ctrl_target, torch.nan)
     self._initialize_target_ramp()
+
+  def set_reset_target_center(
+    self,
+    env_ids: torch.Tensor,
+    center: torch.Tensor,
+  ) -> None:
+    """Set optional absolute reset centers, using NaN to retain relative resets."""
+    center = center.to(device=self._ctrl_target.device, dtype=self._ctrl_target.dtype)
+    if center.ndim == 1:
+      center = center[:, None].expand(-1, self._ctrl_target.shape[1])
+    if center.shape != (len(env_ids), self._ctrl_target.shape[1]):
+      raise ValueError(
+        "Tendon reset center must have shape "
+        f"({len(env_ids)}, {self._ctrl_target.shape[1]}), got {tuple(center.shape)}."
+      )
+    self._reset_target_center[env_ids] = center
 
   def process_actions(self, actions: torch.Tensor) -> None:
     super().process_actions(actions)
@@ -238,8 +262,11 @@ class RelativeTendonLengthAction(_ClippedAction):
     current = current_length[env_ids]
     cfg = cast(RelativeTendonLengthActionCfg, self.cfg)
     offset = torch.empty_like(current).uniform_(*cfg.reset_target_range)
-    self._ctrl_target[env_ids] = (current + offset).clamp(
+    center = self._reset_target_center[env_ids]
+    reset_base = torch.where(torch.isfinite(center), center, current)
+    self._ctrl_target[env_ids] = (reset_base + offset).clamp(
       self._ctrl_range[env_ids, :, 0],
       self._ctrl_range[env_ids, :, 1],
     )
+    self._reset_target_center[env_ids] = torch.nan
     self._reset_target_ramp(env_ids)

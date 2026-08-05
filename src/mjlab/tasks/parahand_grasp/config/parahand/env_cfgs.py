@@ -199,6 +199,8 @@ def parahand_only_grasp_object_env_cfg(
     {
       "palm_height_joint_name": "palm_translation_z",
       "palm_height_range": (0.2, 0.4),
+      "object_pose_event_name": "reset_object_pose",
+      "tendon_action_name": "tendon_length",
       "palm_joint_ranges": {
         "palm_translation_x": (-0.1, 0.2),
         "palm_translation_y": (-0.2, 0.2),
@@ -216,6 +218,15 @@ def parahand_only_grasp_object_env_cfg(
     }
   )
   cfg.events["reset_object_pose"].params["position_center"] = (0, 0)
+  cfg.events = {
+    name: cfg.events[name]
+    for name in (
+      "reset_gravity",
+      "reset_table_height",
+      "reset_object_pose",
+      "reset_robot_joints",
+    )
+  }
 
   command_cfg = cfg.commands["object_pose"]
   assert isinstance(command_cfg, LiftingCommandCfg)

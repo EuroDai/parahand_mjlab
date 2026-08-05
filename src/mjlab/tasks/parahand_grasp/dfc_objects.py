@@ -427,7 +427,7 @@ def make_dataset_train_env_cfg(
   position_noise: tuple[float, float],
   clearance: float,
 ) -> ManagerBasedRlEnvCfg:
-  """Create a Stage 8 environment for one fixed mesh shard."""
+  """Create a Stage 6 environment for one fixed mesh shard."""
   if drop_height_range[0] < 0.0 or drop_height_range[1] < drop_height_range[0]:
     raise ValueError("drop_height_range must be non-negative and ordered.")
   if clearance < 0.0:
@@ -441,7 +441,7 @@ def make_dataset_train_env_cfg(
     init_pos=original_object_cfg.init_state.pos,
   )
   cfg.curriculum = {}
-  # Stage 8 keeps thousands of worlds resident, so use a smaller per-world
+  # Stage 6 keeps thousands of worlds resident, so use a smaller per-world
   # contact budget than the 78-world evaluator while retaining headroom for
   # decomposed collision parts touching the floor and hand simultaneously.
   cfg.sim.nconmax = max(cfg.sim.nconmax or 0, 256)

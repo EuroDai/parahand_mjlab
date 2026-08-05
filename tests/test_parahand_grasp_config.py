@@ -4,6 +4,7 @@ from typing import Any, cast
 from unittest.mock import Mock
 
 import mujoco
+import numpy as np
 import pytest
 import torch
 
@@ -46,18 +47,22 @@ from mjlab.tasks.parahand_grasp.mdp.actions import (
   RelativeTendonLengthActionCfg,
 )
 from mjlab.tasks.parahand_grasp.mdp.consts import (
-  BOX_SPHERE_SCALE_RANGE,
+  BOX_SCALE_RANGE,
   CAPSULE_SCALE_RANGE,
   FIRST_LESSON_OBJECT_NAME,
+  ORIGINAL_PALM_STAGE,
+  PALM_TRACKING_LAST_STAGE,
   PRIMITIVE_DATASET_STAGE,
   PRIMITIVE_GRAVITY_FRACTIONS,
   PRIMITIVE_OBJECTS,
   PRIMITIVE_RANDOMIZATION_FRACTIONS,
+  SPHERE_SCALE_RANGE,
 )
 from mjlab.tasks.parahand_grasp.mdp.curriculums import object_lesson_curriculum
 from mjlab.tasks.parahand_grasp.mdp.events import (
   reset_dropped_mesh_object_pose,
   reset_gravity_by_curriculum,
+  reset_joints_above_table,
   reset_primitive_object_pose,
 )
 from mjlab.tasks.parahand_grasp.mdp.observations import (
@@ -67,7 +72,7 @@ from mjlab.tasks.parahand_grasp.mdp.observations import (
   object_to_palm_position_b,
 )
 from mjlab.tasks.parahand_grasp.mdp.terminations import object_out_of_bounds
-from mjlab.utils.lab_api.math import quat_apply
+from mjlab.utils.lab_api.math import matrix_from_quat, quat_apply, quat_from_euler_xyz
 
 
 def test_object_spec_contains_all_curriculum_primitives():
@@ -107,20 +112,19 @@ def test_object_curriculum_uses_continuously_randomized_primitives():
   assert isinstance(object_cfg, EntityCfg)
   assert FIRST_LESSON_OBJECT_NAME == "object_box"
   assert len(PRIMITIVE_OBJECTS) == 3
-  assert CAPSULE_SCALE_RANGE == (0.5, 1.25)
-  assert BOX_SPHERE_SCALE_RANGE == (0.5, 1.0)
-  assert PRIMITIVE_DATASET_STAGE == 8
+  assert CAPSULE_SCALE_RANGE == (0.5, 2.0)
+  assert BOX_SCALE_RANGE == (0.5, 1.0)
+  assert SPHERE_SCALE_RANGE == (0.5, 1.5)
+  assert PRIMITIVE_DATASET_STAGE == 6
   assert PRIMITIVE_RANDOMIZATION_FRACTIONS == (
     0.0,
-    0.0,
-    0.0,
     0.1,
     0.1,
-    0.25,
     0.5,
     1.0,
+    1.0,
   )
-  assert PRIMITIVE_GRAVITY_FRACTIONS == (0.0, 0.2, 0.5, 0.5, 0.5, 0.7, 1.0, 1.0)
+  assert PRIMITIVE_GRAVITY_FRACTIONS == (0.0, 0.5, 0.5, 1.0, 1.0, 1.0)
   assert isinstance(command_cfg, LiftingCommandCfg)
   assert command_cfg.object_pose_range is None
   assert "geom_size" in reset_cfg.func.model_fields
@@ -142,7 +146,7 @@ def test_object_curriculum_uses_continuously_randomized_primitives():
   assert runner_cfg.stage2_enabled is True
   assert runner_cfg.unseen_eval_interval == 300
   assert runner_cfg.unseen_eval_start_stage == 2
-  assert runner_cfg.stage2_dataset == "robustdex"
+  assert runner_cfg.stage2_dataset == "dfc"
   assert runner_cfg.stage2_primitive_ratio == 0.25
   assert runner_cfg.stage2_shard_size_per_rank == 128
   assert runner_cfg.stage2_shard_update_interval == 200
@@ -188,12 +192,10 @@ def test_object_curriculum_uses_continuously_randomized_primitives():
   assert reset_joints_cfg.params["position_range"] == (-0.05, 0.05)
   assert curriculum_cfg.params["promotion_threshold"] == (
     0.85,
-    0.85,
-    0.80,
     0.80,
     0.75,
     0.72,
-    0.72,
+    0.70,
     0.70,
   )
   assert curriculum_cfg.params["success_threshold"] == 0.05
@@ -211,6 +213,95 @@ def test_standalone_hand_and_table_share_randomized_base_height():
   assert joint_reset_cfg.func.__name__ == "reset_joints_above_table"
   assert joint_reset_cfg.params["palm_height_joint_name"] == "palm_translation_z"
   assert joint_reset_cfg.params["palm_height_range"] == (0.2, 0.4)
+  assert joint_reset_cfg.params["object_pose_event_name"] == "reset_object_pose"
+  assert joint_reset_cfg.params["tendon_action_name"] == "tendon_length"
+  event_names = tuple(cfg.events)
+  assert event_names.index("reset_object_pose") < event_names.index(
+    "reset_robot_joints"
+  )
+
+
+def test_tracking_palm_pose_preserves_shape_reference_in_object_frame():
+  reset = object.__new__(reset_joints_above_table)
+  model = mujoco.MjModel.from_xml_path(str(PARAHAND_ONLY_XML))
+  palm_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "palm")
+  reset._palm_base_rotation = matrix_from_quat(
+    torch.tensor(model.body_quat[palm_body_id])[None]
+  )[0]
+  table_heights = torch.tensor([0.6, 0.8, 1.0, 1.2])
+  env = SimpleNamespace(
+    scene=SimpleNamespace(env_origins=torch.zeros(4, 3)),
+    event_manager=SimpleNamespace(
+      get_term_cfg=lambda _name: SimpleNamespace(
+        func=SimpleNamespace(heights=table_heights)
+      )
+    ),
+  )
+  zero = torch.zeros(4)
+  yaw = torch.tensor([0.0, 0.0, 0.5 * math.pi, -0.5 * math.pi])
+  orientation = quat_from_euler_xyz(zero, zero, yaw)
+  object_pose = torch.cat(
+    (
+      torch.tensor(
+        [
+          [0.0, 0.0, 0.63],
+          [0.0, 0.0, 0.82],
+          [0.1, 0.2, 1.03],
+          [0.1, 0.2, 1.23],
+        ]
+      ),
+      orientation,
+    ),
+    dim=-1,
+  )
+
+  palm_position = reset._tracking_palm_position(
+    cast(Any, env),
+    torch.arange(4),
+    torch.tensor([1, 0, 2, 1]),
+    object_pose,
+    "palm_translation_z",
+  )
+
+  torch.testing.assert_close(
+    palm_position[0],
+    torch.tensor([-0.12, -0.005, 0.168, 0.23, 0.0, 0.0]),
+  )
+  torch.testing.assert_close(
+    palm_position[1],
+    torch.tensor([-0.122, -0.005, 0.168, 0.23, 0.0, 0.0]),
+  )
+  torch.testing.assert_close(
+    palm_position[2, :3],
+    torch.tensor([0.105, 0.08, 0.168]),
+  )
+  torch.testing.assert_close(
+    palm_position[3, :3],
+    torch.tensor([0.095, 0.32, 0.168]),
+  )
+
+  data = mujoco.MjData(model)
+  follow_key_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "follow_object")
+  cube_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "cube")
+  mujoco.mj_resetDataKeyframe(model, data, follow_key_id)
+  mujoco.mj_forward(model, data)
+  reference_relative_rotation = data.xmat[cube_body_id].reshape(3, 3).T @ data.xmat[
+    palm_body_id
+  ].reshape(3, 3)
+
+  for index in (2, 3):
+    data.qpos[:6] = palm_position[index].numpy()
+    data.qpos[-7:-4] = (0.1, 0.2, 0.03)
+    data.qpos[-4:] = orientation[index].numpy()
+    mujoco.mj_forward(model, data)
+    transformed_relative_rotation = data.xmat[cube_body_id].reshape(3, 3).T @ data.xmat[
+      palm_body_id
+    ].reshape(3, 3)
+    np.testing.assert_allclose(
+      transformed_relative_rotation,
+      reference_relative_rotation,
+      atol=1.0e-6,
+    )
 
 
 def test_play_curriculum_override_keeps_full_target_randomization_at_stage_one():
@@ -227,23 +318,23 @@ def test_play_curriculum_override_keeps_full_target_randomization_at_stage_one()
   assert target_range.x == (-0.1, 0.1)
   assert target_range.y == (-0.1, 0.1)
   assert target_range.z == (0.35, 0.55)
-  assert cfg.events["reset_robot_joints"].params["position_range"] == (0.0, 0.0)
-
-
-def test_primitive_curriculum_override_handles_zero_through_seven():
-  cfg = parahand_only_grasp_object_env_cfg(play=True)
-
-  _apply_curriculum_stage_override(cfg, 3)
   assert cfg.events["reset_robot_joints"].params["position_range"] == (-0.05, 0.05)
 
+
+def test_primitive_curriculum_override_handles_zero_through_five():
   cfg = parahand_only_grasp_object_env_cfg(play=True)
-  with pytest.raises(ValueError, match="between 0 and 7"):
-    _apply_curriculum_stage_override(cfg, 8)
+
+  _apply_curriculum_stage_override(cfg, 5)
+  assert cfg.events["reset_robot_joints"].params["position_range"] == (-0.5, 0.5)
+
+  cfg = parahand_only_grasp_object_env_cfg(play=True)
+  with pytest.raises(ValueError, match="between 0 and 5"):
+    _apply_curriculum_stage_override(cfg, 6)
 
 
 @pytest.mark.parametrize(
   "stage,fraction",
-  [(3, 0.1), (4, 0.1), (5, 0.25), (6, 0.5), (7, 1.0)],
+  [(1, 0.1), (2, 0.1), (3, 0.5), (4, 1.0), (5, 1.0)],
 )
 def test_play_curriculum_override_scales_all_robot_ranges(stage, fraction):
   cfg = parahand_only_grasp_object_env_cfg(play=True)
@@ -463,13 +554,14 @@ def test_object_reset_samples_continuous_dimensions_bounded_by_defaults():
   event.sizes = torch.zeros(num_envs, 3)
   env_ids = torch.arange(num_envs)
 
-  event._sample_primitives(env_ids, 7)
+  event._sample_primitives(env_ids, ORIGINAL_PALM_STAGE)
 
   assert set(event.shape_ids.tolist()) == {0, 1, 2}
   selected_defaults = event._base_sizes[event.shape_ids]
   positive = selected_defaults > 0
   capsule = event.shape_ids == 0
-  other = ~capsule
+  box = event.shape_ids == 1
+  sphere = event.shape_ids == 2
   capsule_dimensions = event._base_sizes[0] > 0
   assert torch.all(
     event.sizes[capsule][:, capsule_dimensions]
@@ -480,11 +572,17 @@ def test_object_reset_samples_continuous_dimensions_bounded_by_defaults():
     <= event._base_sizes[0, capsule_dimensions] * CAPSULE_SCALE_RANGE[1]
   )
   assert torch.all(
-    event.sizes[other][positive[other]] <= selected_defaults[other][positive[other]]
+    event.sizes[box][positive[box]] <= selected_defaults[box][positive[box]]
   )
   assert torch.all(
-    event.sizes[other][positive[other]]
-    >= selected_defaults[other][positive[other]] * BOX_SPHERE_SCALE_RANGE[0]
+    event.sizes[box][positive[box]]
+    >= selected_defaults[box][positive[box]] * BOX_SCALE_RANGE[0]
+  )
+  assert torch.all(
+    event.sizes[sphere, 0] >= selected_defaults[sphere, 0] * SPHERE_SCALE_RANGE[0]
+  )
+  assert torch.all(
+    event.sizes[sphere, 0] <= selected_defaults[sphere, 0] * SPHERE_SCALE_RANGE[1]
   )
   box_sizes = event.sizes[event.shape_ids == 1]
   assert torch.any(box_sizes[:, 0] != box_sizes[:, 1])
@@ -493,7 +591,7 @@ def test_object_reset_samples_continuous_dimensions_bounded_by_defaults():
 
 @pytest.mark.parametrize(
   "stage,fraction",
-  [(4, 0.1), (5, 0.25), (6, 0.5), (7, 1.0)],
+  [(2, 0.1), (3, 0.5), (4, 1.0), (5, 1.0)],
 )
 def test_primitive_size_curriculum_uses_configured_fraction(stage, fraction):
   num_envs = 6000
@@ -505,7 +603,7 @@ def test_primitive_size_curriculum_uses_configured_fraction(stage, fraction):
   event._sample_primitives(torch.arange(num_envs), stage)
 
   for shape_id, full_range in enumerate(
-    (CAPSULE_SCALE_RANGE, BOX_SPHERE_SCALE_RANGE, BOX_SPHERE_SCALE_RANGE)
+    (CAPSULE_SCALE_RANGE, BOX_SCALE_RANGE, SPHERE_SCALE_RANGE)
   ):
     mask = event.shape_ids == shape_id
     dimensions = event._base_sizes[shape_id] > 0
@@ -518,17 +616,16 @@ def test_primitive_size_curriculum_uses_configured_fraction(stage, fraction):
     assert scales.max() > expected_max - 0.01
 
 
-def test_first_three_lessons_use_one_fixed_nominal_box():
+def test_first_lesson_uses_one_fixed_nominal_box():
   event = object.__new__(reset_primitive_object_pose)
   event._base_sizes = torch.tensor([obj.size for obj in PRIMITIVE_OBJECTS])
   event.shape_ids = torch.zeros(6, dtype=torch.long)
   event.sizes = torch.zeros(6, 3)
   env_ids = torch.arange(6)
 
-  for stage in range(3):
-    event._sample_primitives(env_ids, stage)
-    assert event.shape_ids.tolist() == [1, 1, 1, 1, 1, 1]
-    torch.testing.assert_close(event.sizes, event._base_sizes[event.shape_ids])
+  event._sample_primitives(env_ids, 0)
+  assert event.shape_ids.tolist() == [1, 1, 1, 1, 1, 1]
+  torch.testing.assert_close(event.sizes, event._base_sizes[event.shape_ids])
 
 
 def test_ten_percent_box_lesson_randomizes_only_box_dimensions():
@@ -538,7 +635,7 @@ def test_ten_percent_box_lesson_randomizes_only_box_dimensions():
   event.shape_ids = torch.zeros(num_envs, dtype=torch.long)
   event.sizes = torch.zeros(num_envs, 3)
 
-  event._sample_primitives(torch.arange(num_envs), 3)
+  event._sample_primitives(torch.arange(num_envs), 1)
 
   assert set(event.shape_ids.tolist()) == {1}
   scales = event.sizes / event._base_sizes[1]
@@ -547,7 +644,7 @@ def test_ten_percent_box_lesson_randomizes_only_box_dimensions():
   assert scales.min() < 0.96
 
 
-def test_object_dimensions_cache_fixed_lessons():
+def test_object_dimensions_cache_fixed_first_lesson():
   event = cast(Any, object.__new__(reset_primitive_object_pose))
   event._applied_stage = torch.full((3,), -1, dtype=torch.int8)
   event._sample_primitives = Mock()
@@ -559,15 +656,11 @@ def test_object_dimensions_cache_fixed_lessons():
 
   event._apply_curriculum_stage(env, env_ids, 0)
   event._apply_curriculum_stage(env, env_ids, 0)
-  event._apply_curriculum_stage(env, env_ids, 1)
-  event._apply_curriculum_stage(env, env_ids, 1)
-  event._apply_curriculum_stage(env, env_ids, 2)
-  event._apply_curriculum_stage(env, env_ids, 2)
 
-  assert event._sample_primitives.call_count == 3
-  assert event._write_primitive_model.call_count == 3
-  assert env.sim.recompute_constants.call_count == 3
-  assert event._applied_stage.tolist() == [2, 2, 2]
+  assert event._sample_primitives.call_count == 1
+  assert event._write_primitive_model.call_count == 1
+  assert env.sim.recompute_constants.call_count == 1
+  assert event._applied_stage.tolist() == [0, 0, 0]
 
 
 def test_random_lesson_refreshes_size_slots_at_stage_interval():
@@ -587,11 +680,11 @@ def test_random_lesson_refreshes_size_slots_at_stage_interval():
   env_ids = torch.arange(3)
 
   for _ in range(17):
-    event._apply_curriculum_stage(env, env_ids, 3)
+    event._apply_curriculum_stage(env, env_ids, 1)
 
   assert event._refresh_size_slots.call_count == 2
   assert event._activate_cached_primitives.call_count == 17
-  assert event._applied_stage.tolist() == [3, 3, 3]
+  assert event._applied_stage.tolist() == [1, 1, 1]
 
 
 def test_inactive_primitive_slots_are_tiny_without_displacement():
@@ -619,12 +712,19 @@ def test_inactive_primitive_slots_are_tiny_without_displacement():
 
 
 def test_object_pose_is_fixed_first_then_shape_specific_at_full_randomization():
-  num_envs = 2
+  num_envs = 3
   event = cast(Any, object.__new__(reset_primitive_object_pose))
   event._apply_curriculum_stage = Mock()
-  event._floor_offsets = Mock(return_value=torch.full((num_envs,), 0.025))
-  event.shape_ids = torch.tensor([0, 1])
-  event.sizes = torch.tensor([[0.02, 0.035, 0.0], [0.03, 0.03, 0.03]])
+  event._floor_offsets = Mock(return_value=torch.tensor([0.02, 0.025, 0.025]))
+  event.shape_ids = torch.tensor([0, 1, 2])
+  event.sizes = torch.tensor(
+    [
+      [0.02, 0.035, 0.0],
+      [0.03, 0.03, 0.03],
+      [0.03, 0.0, 0.0],
+    ]
+  )
+  event.latest_root_pose = torch.zeros(num_envs, 7)
   event.object = SimpleNamespace(
     write_root_link_pose_to_sim=Mock(),
     write_root_link_velocity_to_sim=Mock(),
@@ -634,7 +734,7 @@ def test_object_pose_is_fixed_first_then_shape_specific_at_full_randomization():
     scene=SimpleNamespace(env_origins=torch.zeros(num_envs, 3)),
     event_manager=SimpleNamespace(
       get_term_cfg=lambda _name: SimpleNamespace(
-        func=SimpleNamespace(heights=torch.tensor([0.6, 1.0]))
+        func=SimpleNamespace(heights=torch.tensor([0.6, 1.0, 0.8]))
       )
     ),
   )
@@ -643,7 +743,7 @@ def test_object_pose_is_fixed_first_then_shape_specific_at_full_randomization():
     "object_name": "object",
     "position_center": (0.0, 0.0),
     "position_noise": (0.05, 0.1),
-    "capsule_roll_range": (0.5, 0.5),
+    "capsule_yaw_range": (0.5, 0.5),
     "box_yaw_range": (0.5, 0.5),
     "table_height_event_name": "reset_table_height",
     "table_clearance": 0.003,
@@ -653,24 +753,30 @@ def test_object_pose_is_fixed_first_then_shape_specific_at_full_randomization():
   event(env, env_ids, curriculum_stage=0, **params)
   first_lesson_pose = event.object.write_root_link_pose_to_sim.call_args.args[0]
   assert torch.all(first_lesson_pose[:, :2] == 0.0)
-  torch.testing.assert_close(first_lesson_pose[:, 2], torch.tensor([0.623, 1.028]))
+  torch.testing.assert_close(
+    first_lesson_pose[:, 2],
+    torch.tensor([0.623, 1.028, 0.828]),
+  )
   torch.testing.assert_close(
     first_lesson_pose[:, 3:],
     torch.tensor([[1.0, 0.0, 0.0, 0.0]]).expand(num_envs, -1),
   )
 
   torch.manual_seed(0)
-  event(env, env_ids, curriculum_stage=7, **params)
+  event(env, env_ids, curriculum_stage=PALM_TRACKING_LAST_STAGE, **params)
   final_pose = event.object.write_root_link_pose_to_sim.call_args.args[0]
   assert torch.all(final_pose[:, 0].abs() <= 0.05)
   assert torch.all(final_pose[:, 1].abs() <= 0.1)
   assert torch.any(final_pose[:, :2] != 0.0)
-  # Capsule gets roll and no yaw; box gets yaw and no roll.
-  assert final_pose[0, 4] > 0.0
-  assert final_pose[0, 6] == 0.0
+  # All primitives stay upright and rotate around the tabletop normal.
+  assert final_pose[0, 4] == 0.0
+  assert final_pose[0, 6] > 0.0
   assert final_pose[1, 4] == 0.0
   assert final_pose[1, 6] > 0.0
-  assert final_pose[0, 2] == pytest.approx(0.6 + 0.02 + 0.035 * math.sin(0.5) + 0.003)
+  assert final_pose[2, 4] == 0.0
+  assert final_pose[2, 6] > 0.0
+  assert final_pose[0, 2] == pytest.approx(0.6 + 0.02 + 0.003)
+  torch.testing.assert_close(event.latest_root_pose, final_pose)
 
 
 def test_dropped_mesh_height_is_measured_above_each_tabletop():
@@ -937,6 +1043,20 @@ def test_parahand_only_asset_removes_demo_scene_and_builds_articulation():
   assert model.nu == 22
   assert len(spec.keys) == 1
   assert spec.keys[0].name == "home"
+  follow_key_id = mujoco.mj_name2id(
+    standalone_model, mujoco.mjtObj.mjOBJ_KEY, "follow_object"
+  )
+  assert follow_key_id >= 0
+  assert standalone_model.key_qpos[follow_key_id, :6] == pytest.approx(
+    (-0.12, -0.005, 0.168, 0.23, 0.0, 0.0)
+  )
+  for tendon_name in TENDON_ACTUATOR_NAMES:
+    actuator_id = mujoco.mj_name2id(
+      standalone_model,
+      mujoco.mjtObj.mjOBJ_ACTUATOR,
+      tendon_name,
+    )
+    assert standalone_model.key_ctrl[follow_key_id, actuator_id] == pytest.approx(0.021)
   palm_translation_z_id = mujoco.mj_name2id(
     model, mujoco.mjtObj.mjOBJ_JOINT, "palm_translation_z"
   )
@@ -963,7 +1083,7 @@ def test_parahand_only_asset_removes_demo_scene_and_builds_articulation():
     tendon_actuator_id = mujoco.mj_name2id(
       model, mujoco.mjtObj.mjOBJ_ACTUATOR, tendon_name
     )
-    assert model.key_ctrl[0, tendon_actuator_id] == pytest.approx(0.0285)
+    assert model.key_ctrl[0, tendon_actuator_id] == pytest.approx(0.021)
 
   robot = get_parahand_only_robot_cfg().build()
   assert robot.root_body.name == "mocap_base"
@@ -1080,7 +1200,7 @@ def test_parahand_only_task_uses_xml_home_and_requested_action_scales():
   assert reset_joints_cfg.joint_names == expected_joint_names
   assert cfg.events["reset_robot_joints"].params["position_range"] == (-0.05, 0.05)
   assert "curriculum_event_name" not in cfg.events["reset_robot_joints"].params
-  assert cfg.events["reset_object_pose"].params["position_center"] == (0.3, 0.1)
+  assert cfg.events["reset_object_pose"].params["position_center"] == (0, 0)
   command_cfg = cfg.commands["object_pose"]
   assert isinstance(command_cfg, LiftingCommandCfg)
   target_range = command_cfg.target_position_range

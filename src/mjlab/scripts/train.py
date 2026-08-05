@@ -35,7 +35,7 @@ class TrainConfig:
   video_interval: int = 2000
   enable_nan_guard: bool = False
   curriculum_stage: int | None = None
-  """Start training from this curriculum stage; ParaHand supports stages 0--8."""
+  """Start training from this curriculum stage; ParaHand supports stages 0--6."""
   log_root: str = "logs/rsl_rl"
   """Root directory under which experiment logs are written."""
   torchrunx_log_dir: str | None = None

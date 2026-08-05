@@ -26,11 +26,11 @@ Added
   object-contact force magnitude of each episode.
 - Added ``play --curriculum-stage`` to force ParaHand grasp evaluation to use a
   specific curriculum lesson without restarting the online promotion history.
-  Stage 8 playback constructs the configured DFCData or RobustDexGrasp mesh
+  Stage 6 playback constructs the configured DFCData or RobustDexGrasp mesh
   environment instead of trying to apply a primitive reset stage.
 - Added a shared ``--curriculum-stage`` interface to ``train`` and ``play``.
-  ParaHand stages 0--7 select the corresponding primitive lesson, while Stage 8
-  starts the mesh dataset phase with Stage 7 primitive rehearsal.
+  ParaHand stages 0--5 select the corresponding primitive lesson, while Stage 6
+  starts the mesh dataset phase with Stage 5 primitive rehearsal.
 - Added a project-level ParaHand rollout tool that collects complete batched
   episodes, indexes them by individual termination reason, and replays selected
   trajectories interactively in Viser without rerunning the policy.
@@ -56,11 +56,12 @@ Added
   deterministic rank-disjoint shards and rotated periodically. Dataset objects
   reset with random XY and SO(3) orientation and are released above their oriented
   support plane. Complete PPO updates alternate between the dataset environment
-  and the fully randomized analytic Stage 7 environment, with 25% primitive
+  and the fully randomized analytic Stage 5 environment, with 25% primitive
   rehearsal by default.
 - Added a per-environment analytic tabletop for ParaHand grasp training. Its
   0.8 m square surface randomizes from 0.6 to 1.0 m at reset. The standalone hand
-  starts 0.2--0.4 m above the surface, primitive objects rest on it, and dataset
+  tracks primitive objects through Stage 4 and uses its 0.2--0.4 m independent
+  Palm-height reset in Stage 5. Primitive objects rest on the table, and dataset
   objects release 0.10--0.15 m above it using their oriented point-cloud support.
 
 Changed
@@ -69,19 +70,20 @@ Changed
 - ParaHand joint-position and tendon-length action targets now linearly ramp from
   the prior emitted target to the policy target over each physics decimation interval.
 - All ParaHand primitive curriculum stages now use a 4096-episode success window
-  and permit promotion after 1024 completed episodes. Stage 0--7 promotion
-  thresholds are now 85%, 85%, 80%, 80%, 75%, 72%, 72%, and 70%, respectively.
+  and permit promotion after 1024 completed episodes. Stage 0--5 promotion
+  thresholds are now 85%, 80%, 75%, 72%, 70%, and 70%, respectively.
 - ParaHand target positions now use their full configured XYZ randomization
   ranges in every primitive curriculum stage and in the dataset stage; the
   curriculum still progressively expands object, table, robot, and control
   randomization.
-- ParaHand Stage 8 mesh training and unseen-object evaluation now inherit the
-  complete Stage 7 table, gravity, robot, tendon-target, and actor-observation
+- ParaHand Stage 6 mesh training and unseen-object evaluation now inherit the
+  complete Stage 5 table, gravity, robot, tendon-target, and actor-observation
   randomization. Mesh drop heights are measured vertically from each randomized
   tabletop to the object's lowest point in its sampled orientation.
 - The ParaHand primitive curriculum now begins with a fixed-size nominal box at
-  zero gravity, then raises gravity to 0.2g and 0.5g before introducing reset
-  randomization and the other primitive shapes.
+  zero gravity, introduces 10% box randomization at 0.5g, adds all three
+  primitives at the same range, and then expands to 50% and 100% randomization
+  at full gravity.
 - ParaHand grasp policies now use a tanh-squashed Gaussian action distribution
   with the original state-independent learnable standard deviation. Environment
   actions and deterministic outputs are bounded to ``[-1, 1]``, and PPO
@@ -110,20 +112,26 @@ Changed
   control target, while tendon actions compute one target per policy step. Both hold
   their targets across all simulation substeps instead of recomputing them relative
   to the latest state at every simulation substep.
-- The ParaHand grasp curriculum uses eight analytic lessons before the mesh
-  dataset. Stages 0--2 use one fixed-size nominal box at 0g, 0.2g, and 0.5g.
-  Stage 3 adds 10% reset and box-size randomization; Stage 4 adds randomized
-  capsule/box/sphere selection at the same 10% range. Stages 5--7 use 0.7g/25%,
-  1.0g/50%, and 1.0g/100% randomization.
-  This progression covers table height, object size, position and shape-specific
-  orientation, palm pose, active joints, tendon targets, and
-  their matching control targets. Capsule radius and half-length scale from 0.5
-  to 1.25 times nominal; box half-extents and sphere radius scale independently
-  from 0.5 to 1.0 times nominal. Tilted capsules randomize roll and use their
-  rotated support height when placed on the table. The three fixed-size lessons
-  write primitive model constants only on initialization or stage transition;
-  randomized lessons refresh dimensions every 16, 16, 8, 4, and 2 reset batches.
-  Stages 4--7 cache all three primitive slots; type switches restore cached MuJoCo
+- The ParaHand grasp curriculum uses six analytic lessons before the mesh dataset.
+  Stage 0 uses one fixed-size nominal box at zero gravity. Stage 1 adds 10%
+  box-only randomization at 0.5g; Stage 2 adds randomized capsule, box, and sphere
+  selection at the same range. Stages 3 and 4 use full gravity with 50% and 100%
+  randomization. Stage 5 retains 100% randomization but restores the original
+  independent Palm reset before promotion to dataset Stage 6.
+  In Stages 0--4, the standalone hand uses the XML ``follow_object`` frame for
+  boxes and spheres and a dedicated full-hand frame for capsules. The Palm
+  preserves its object-relative pose across object XY, height, and yaw changes;
+  active joints apply the lesson's noise, passive PIP/DIP joints use the frame
+  values, and tendon targets center at 0.021. Stage 5 retains the original reset
+  path. Reset joint targets enforce the same ordered MCP side-swing limits as
+  policy actions. Capsule radius and half-length scale
+  independently from 0.5 to 2.0 times nominal, box half-extents independently
+  scale from 0.5 to 1.0, and sphere radius scales from 0.5 to 1.5. All three
+  primitives randomize yaw around the tabletop normal, so capsules remain lying
+  flat. The fixed-size lesson writes primitive model constants only on
+  initialization or stage transition; randomized lessons
+  refresh dimensions every 16, 16, 4, 2, and 2 reset batches. Stages 2--5 cache
+  all three primitive slots; type switches restore cached MuJoCo
   derived constants without running ``set_const``. Each scene uses
   one fixed, uniformly distributed 256-point surface cloud; observations only
   rotate and translate those points with the object. Dataset observations
@@ -137,17 +145,17 @@ Changed
   use 1024-1024-512-512 MLPs. This architecture requires training from scratch.
   Promotion uses stage-specific rolling total final-pose success rates and the
   Isaac Dexsuite Lift criterion of less than 5 cm error. Passing the fully
-  randomized primitive lesson promotes the runner to dataset Stage 8 while
-  retaining Stage 7 for primitive rehearsal.
+  randomized primitive lesson promotes the runner to dataset Stage 6 while
+  retaining Stage 5 for primitive rehearsal.
 - The standalone ParaHand PPO configuration now uses a fixed 0.0003 learning rate
   and the same scalar-standard-deviation Gaussian action distribution as the
   FR3-mounted task. Its palm translation axes now make the x and y actuator names
   correspond to world x and y motion.
 - The ParaHand grasp tasks now enable the simulation NaN guard by default so
   divergent physics states are captured for diagnosis.
-- The standalone ParaHand reset now preserves the XML ``home`` keyframe, including
-  the palm height and tendon targets, and places the task object at the XML demo
-  cube position before applying reset randomization.
+- The standalone ParaHand asset now preserves the XML ``home`` keyframe for
+  simulation while retaining a separate ``follow_object`` reference keyframe for
+  object-relative reset poses.
 - The play command accepts ``--episode-length-s`` to evaluate policies with the
   same reset horizon used during training.
 - The Viser reward bar panel's term cap is now configurable via

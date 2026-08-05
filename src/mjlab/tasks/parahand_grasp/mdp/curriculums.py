@@ -99,8 +99,8 @@ class object_lesson_curriculum:
     if stage < self._stage:
       raise ValueError("The object curriculum cannot move backwards.")
     self._stage = stage
-    # Stage 8 uses a separate mesh environment. Primitive rehearsal remains at
-    # the fully randomized Stage 7 settings.
+    # Stage 6 uses a separate mesh environment. Primitive rehearsal remains at
+    # the fully randomized Stage 5 settings with independent Palm resets.
     self._set_randomization_stage(min(stage, PRIMITIVE_DATASET_STAGE - 1))
     self._window_size = self._window_sizes[min(stage, PRIMITIVE_DATASET_STAGE - 1)]
     self._clear_success_history()

@@ -52,16 +52,20 @@ JOINT_ACTUATOR_NAMES = (
 def get_spec() -> mujoco.MjSpec:
   """Load the hand asset without its standalone demo cube and floor."""
   spec = mujoco.MjSpec.from_file(str(PARAHAND_ONLY_XML))
-  if len(spec.keys) != 1 or spec.keys[0].name != "home":
-    raise ValueError("ParaHand-only XML must define exactly one 'home' keyframe.")
+  key_names = {key.name for key in spec.keys}
+  if key_names != {"home", "follow_object"}:
+    raise ValueError(
+      "ParaHand-only XML must define 'home' and 'follow_object' keyframes."
+    )
   if spec.joints[-1].name != "cube_freejoint":
     raise ValueError("ParaHand-only demo cube freejoint must be the final joint.")
 
-  xml_home = spec.keys[0]
+  xml_home = next(key for key in spec.keys if key.name == "home")
   home_qpos = list(xml_home.qpos)[:-7]
   home_qvel = list(xml_home.qvel)[:-6]
   home_ctrl = list(xml_home.ctrl)
-  spec.delete(xml_home)
+  for key in tuple(spec.keys):
+    spec.delete(key)
   spec.delete(spec.body("cube"))
   spec.delete(spec.geom("floor"))
 

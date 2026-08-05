@@ -11,14 +11,22 @@ from mjlab.entity import Entity
 from mjlab.envs.mdp.events import reset_joints_by_offset
 from mjlab.managers.event_manager import RecomputeLevel
 from mjlab.managers.scene_entity_config import SceneEntityCfg
-from mjlab.utils.lab_api.math import quat_apply, quat_from_euler_xyz
+from mjlab.utils.lab_api.math import (
+  matrix_from_quat,
+  quat_apply,
+  quat_from_euler_xyz,
+)
 
 from ._table import get_table_heights
+from .actions import RelativeTendonLengthAction, apply_mcp_1_constraints
 from .consts import (
-  BOX_SPHERE_SCALE_RANGE,
+  BOX_SCALE_RANGE,
   CAPSULE_SCALE_RANGE,
+  ORIENTATION_RANDOMIZATION_STAGE,
+  PALM_TRACKING_LAST_STAGE,
   PRIMITIVE_DATASET_STAGE,
   PRIMITIVE_OBJECTS,
+  SPHERE_SCALE_RANGE,
   THREE_PRIMITIVE_STAGE,
   primitive_gravity_fraction,
   primitive_randomization_fraction,
@@ -33,7 +41,74 @@ _INACTIVE_SIZE = 1.0e-6
 _CAPSULE = 0
 _BOX = 1
 _SPHERE = 2
-_SIZE_REFRESH_INTERVALS = {3: 16, 4: 16, 5: 8, 6: 4, 7: 2}
+_SIZE_REFRESH_INTERVALS = {1: 16, 2: 16, 3: 4, 4: 2, 5: 2}
+_PALM_JOINT_NAMES = (
+  "palm_translation_x",
+  "palm_translation_y",
+  "palm_translation_z",
+  "palm_rotation_x",
+  "palm_rotation_y",
+  "palm_rotation_z",
+)
+_BOX_SPHERE_PALM_REFERENCE = (-0.12, -0.005, 0.168, 0.23, 0.0, 0.0)
+_CAPSULE_PALM_REFERENCE = (-0.122, -0.005, 0.168, 0.23, 0.0, 0.0)
+_BOX_SPHERE_OBJECT_REFERENCE_HEIGHT = 0.03
+_CAPSULE_OBJECT_REFERENCE_HEIGHT = 0.02
+_BOX_SPHERE_HAND_JOINT_REFERENCE = {
+  "thumb_cmc_1": 0.0,
+  "thumb_cmc_2": 0.22,
+  "thumb_mcp": 0.23,
+  "thumb_ip": 0.63,
+  "index_mcp_1": 0.0,
+  "index_mcp_2": 0.7,
+  "index_pip": 0.47,
+  "index_dip": 0.36,
+  "middle_mcp_1": 0.0,
+  "middle_mcp_2": 0.7,
+  "middle_pip": 0.47,
+  "middle_dip": 0.36,
+  "ring_mcp_1": 0.0,
+  "ring_mcp_2": 0.7,
+  "ring_pip": 0.47,
+  "ring_dip": 0.36,
+  "little_mcp_1": 0.0,
+  "little_mcp_2": 0.7,
+  "little_pip": 0.47,
+  "little_dip": 0.36,
+}
+_CAPSULE_HAND_JOINT_REFERENCE = {
+  "thumb_cmc_1": 0.0,
+  "thumb_cmc_2": 0.22,
+  "thumb_mcp": 0.32,
+  "thumb_ip": 0.63,
+  "index_mcp_1": 0.0,
+  "index_mcp_2": 0.95,
+  "index_pip": 0.45,
+  "index_dip": 0.39,
+  "middle_mcp_1": 0.0,
+  "middle_mcp_2": 0.95,
+  "middle_pip": 0.45,
+  "middle_dip": 0.39,
+  "ring_mcp_1": 0.0,
+  "ring_mcp_2": 0.95,
+  "ring_pip": 0.45,
+  "ring_dip": 0.39,
+  "little_mcp_1": 0.0,
+  "little_mcp_2": 0.95,
+  "little_pip": 0.45,
+  "little_dip": 0.39,
+}
+_PASSIVE_FINGER_JOINT_NAMES = (
+  "index_pip",
+  "index_dip",
+  "middle_pip",
+  "middle_dip",
+  "ring_pip",
+  "ring_dip",
+  "little_pip",
+  "little_dip",
+)
+_TRACKING_TENDON_REFERENCE = 0.021
 _CACHED_DERIVED_FIELDS = (
   "body_subtreemass",
   "dof_invweight0",
@@ -42,6 +117,37 @@ _CACHED_DERIVED_FIELDS = (
   "tendon_invweight0",
   "actuator_acc0",
 )
+
+
+def _matrix_from_intrinsic_xyz(euler_xyz: torch.Tensor) -> torch.Tensor:
+  """Convert intrinsic XYZ Euler angles to rotation matrices."""
+  roll, pitch, yaw = euler_xyz.unbind(dim=-1)
+  zero = torch.zeros_like(roll)
+  one = torch.ones_like(roll)
+  cr, sr = torch.cos(roll), torch.sin(roll)
+  cp, sp = torch.cos(pitch), torch.sin(pitch)
+  cy, sy = torch.cos(yaw), torch.sin(yaw)
+  roll_matrix = torch.stack(
+    (one, zero, zero, zero, cr, -sr, zero, sr, cr),
+    dim=-1,
+  ).reshape(-1, 3, 3)
+  pitch_matrix = torch.stack(
+    (cp, zero, sp, zero, one, zero, -sp, zero, cp),
+    dim=-1,
+  ).reshape(-1, 3, 3)
+  yaw_matrix = torch.stack(
+    (cy, -sy, zero, sy, cy, zero, zero, zero, one),
+    dim=-1,
+  ).reshape(-1, 3, 3)
+  return roll_matrix @ pitch_matrix @ yaw_matrix
+
+
+def _intrinsic_xyz_from_matrix(rotation: torch.Tensor) -> torch.Tensor:
+  """Convert rotation matrices to intrinsic XYZ Euler angles."""
+  pitch = torch.asin(rotation[:, 0, 2].clamp(-1.0, 1.0))
+  roll = torch.atan2(-rotation[:, 1, 2], rotation[:, 2, 2])
+  yaw = torch.atan2(-rotation[:, 0, 1], rotation[:, 0, 0])
+  return torch.stack((roll, pitch, yaw), dim=-1)
 
 
 def reset_joints_by_curriculum(
@@ -144,32 +250,83 @@ class reset_table_height:
 
 
 class reset_joints_above_table:
-  """Reset joints near home and sample the ParaHand palm height above the table."""
+  """Reset ParaHand joints with object-relative or independently random Palm poses."""
 
   def __init__(self, cfg: EventTermCfg, env: ManagerBasedRlEnv):
     asset_cfg = cfg.params["asset_cfg"]
     self._asset: Entity = env.scene[asset_cfg.name]
-    joint_ids, _ = self._asset.find_joints(
-      (cfg.params["palm_height_joint_name"],),
+    if asset_cfg.joint_names is None:
+      raise ValueError("ParaHand reset requires explicit active joint names.")
+    active_joint_ids, active_joint_names = self._asset.find_joints(
+      tuple(asset_cfg.joint_names),
       preserve_order=True,
     )
-    if len(joint_ids) != 1:
-      raise ValueError("Expected exactly one palm height joint.")
-    self._palm_height_joint_id = torch.tensor(
-      joint_ids,
+    if tuple(active_joint_names) != tuple(asset_cfg.joint_names):
+      raise ValueError("Could not resolve all configured active ParaHand joints.")
+    self._active_joint_ids = torch.tensor(
+      active_joint_ids, device=env.device, dtype=torch.long
+    )
+    self._active_joint_names = tuple(active_joint_names)
+    self._mcp_1_active_columns = (
+      self._active_joint_names.index("index_mcp_1"),
+      self._active_joint_names.index("middle_mcp_1"),
+      self._active_joint_names.index("ring_mcp_1"),
+      self._active_joint_names.index("little_mcp_1"),
+    )
+    passive_joint_ids, passive_joint_names = self._asset.find_joints(
+      _PASSIVE_FINGER_JOINT_NAMES,
+      preserve_order=True,
+    )
+    if tuple(passive_joint_names) != _PASSIVE_FINGER_JOINT_NAMES:
+      raise ValueError("Could not resolve all passive ParaHand finger joints.")
+    self._passive_joint_ids = torch.tensor(
+      passive_joint_ids, device=env.device, dtype=torch.long
+    )
+    self._box_sphere_passive_reference = torch.tensor(
+      [_BOX_SPHERE_HAND_JOINT_REFERENCE[name] for name in _PASSIVE_FINGER_JOINT_NAMES],
       device=env.device,
-      dtype=torch.long,
+      dtype=torch.float32,
     )
-    palm_joint_ranges = cfg.params["palm_joint_ranges"]
+    self._capsule_passive_reference = torch.tensor(
+      [_CAPSULE_HAND_JOINT_REFERENCE[name] for name in _PASSIVE_FINGER_JOINT_NAMES],
+      device=env.device,
+      dtype=torch.float32,
+    )
     palm_joint_ids, palm_joint_names = self._asset.find_joints(
-      tuple(palm_joint_ranges), preserve_order=True
+      _PALM_JOINT_NAMES, preserve_order=True
     )
-    if tuple(palm_joint_names) != tuple(palm_joint_ranges):
-      raise ValueError("Could not resolve all configured palm curriculum joints.")
+    if tuple(palm_joint_names) != _PALM_JOINT_NAMES:
+      raise ValueError("Could not resolve all ParaHand Palm joints.")
     self._palm_joint_ids = torch.tensor(
       palm_joint_ids, device=env.device, dtype=torch.long
     )
-    self._palm_joint_names = tuple(palm_joint_names)
+    palm_body_ids, palm_body_names = self._asset.find_bodies(
+      ("palm",), preserve_order=True
+    )
+    if tuple(palm_body_names) != ("palm",):
+      raise ValueError("Could not resolve the ParaHand Palm body.")
+    palm_body_id = int(self._asset.indexing.body_ids[palm_body_ids[0]].item())
+    palm_base_quat = torch.tensor(
+      env.sim.mj_model.body_quat[palm_body_id],
+      device=env.device,
+      dtype=torch.float32,
+    )
+    self._palm_base_rotation = matrix_from_quat(palm_base_quat[None])[0]
+    box_sphere_active_reference = torch.full(
+      (len(self._active_joint_names),),
+      torch.nan,
+      device=env.device,
+      dtype=torch.float32,
+    )
+    capsule_active_reference = box_sphere_active_reference.clone()
+    for name, value in _BOX_SPHERE_HAND_JOINT_REFERENCE.items():
+      if name in self._active_joint_names:
+        box_sphere_active_reference[self._active_joint_names.index(name)] = value
+    for name, value in _CAPSULE_HAND_JOINT_REFERENCE.items():
+      if name in self._active_joint_names:
+        capsule_active_reference[self._active_joint_names.index(name)] = value
+    self._box_sphere_active_reference = box_sphere_active_reference
+    self._capsule_active_reference = capsule_active_reference
 
   def __call__(
     self,
@@ -182,59 +339,208 @@ class reset_joints_above_table:
     palm_height_range: tuple[float, float],
     palm_joint_ranges: dict[str, tuple[float, float]],
     curriculum_stage: int,
+    object_pose_event_name: str,
+    tendon_action_name: str,
   ) -> None:
-    del palm_height_joint_name, curriculum_stage
-    reset_joints_by_offset(
-      env,
-      env_ids,
-      position_range=position_range,
-      velocity_range=velocity_range,
-      asset_cfg=asset_cfg,
-    )
+    del asset_cfg
     env_ids = env_ids.to(device=env.device, dtype=torch.long)
-    default_position = self._asset.data.default_joint_pos[
-      env_ids[:, None], self._palm_joint_ids[None, :]
-    ]
-    offsets = torch.stack(
-      [
-        torch.empty(len(env_ids), device=env.device).uniform_(*palm_joint_ranges[name])
-        for name in self._palm_joint_names
-      ],
-      dim=-1,
+    tracking = curriculum_stage <= PALM_TRACKING_LAST_STAGE
+    object_reset = (
+      self._object_reset_term(env, object_pose_event_name) if tracking else None
     )
-    palm_limits = self._asset.data.soft_joint_pos_limits[
-      env_ids[:, None], self._palm_joint_ids[None, :]
-    ]
-    palm_position = (default_position + offsets).clamp(
-      palm_limits[..., 0], palm_limits[..., 1]
+    shape_ids = (
+      object_reset.shape_ids[env_ids]
+      if object_reset is not None
+      else torch.full_like(env_ids, -1)
     )
-    self._asset.write_joint_position_to_sim(
+
+    default_joint_pos = self._asset.data.default_joint_pos
+    default_joint_vel = self._asset.data.default_joint_vel
+    soft_joint_pos_limits = self._asset.data.soft_joint_pos_limits
+    assert default_joint_pos is not None
+    assert default_joint_vel is not None
+    assert soft_joint_pos_limits is not None
+
+    joint_position = default_joint_pos[
+      env_ids[:, None], self._active_joint_ids[None, :]
+    ].clone()
+    if tracking:
+      reference_mask = torch.isfinite(self._box_sphere_active_reference)
+      joint_position = torch.where(
+        reference_mask,
+        self._box_sphere_active_reference,
+        joint_position,
+      )
+      capsule = shape_ids == _CAPSULE
+      if capsule.any():
+        capsule_reference_mask = torch.isfinite(self._capsule_active_reference)
+        joint_position[capsule] = torch.where(
+          capsule_reference_mask,
+          self._capsule_active_reference,
+          joint_position[capsule],
+        )
+    joint_position += torch.empty_like(joint_position).uniform_(*position_range)
+    joint_limits = soft_joint_pos_limits[
+      env_ids[:, None], self._active_joint_ids[None, :]
+    ]
+    joint_position.clamp_(joint_limits[..., 0], joint_limits[..., 1])
+    apply_mcp_1_constraints(
+      joint_position,
+      joint_limits,
+      self._mcp_1_active_columns,
+    )
+
+    joint_velocity = default_joint_vel[
+      env_ids[:, None], self._active_joint_ids[None, :]
+    ].clone()
+    joint_velocity += torch.empty_like(joint_velocity).uniform_(*velocity_range)
+    self._asset.write_joint_state_to_sim(
+      joint_position,
+      joint_velocity,
+      joint_ids=self._active_joint_ids,
+      env_ids=env_ids,
+    )
+    self._asset.data.joint_pos_target[
+      env_ids[:, None], self._active_joint_ids[None, :]
+    ] = joint_position
+    if tracking:
+      passive_position = self._box_sphere_passive_reference.expand(
+        len(env_ids), -1
+      ).clone()
+      passive_position[shape_ids == _CAPSULE] = self._capsule_passive_reference
+      passive_limits = soft_joint_pos_limits[
+        env_ids[:, None], self._passive_joint_ids[None, :]
+      ]
+      passive_position.clamp_(passive_limits[..., 0], passive_limits[..., 1])
+      self._asset.write_joint_state_to_sim(
+        passive_position,
+        torch.zeros_like(passive_position),
+        joint_ids=self._passive_joint_ids,
+        env_ids=env_ids,
+      )
+
+    tendon_action = env.action_manager.get_term(tendon_action_name)
+    if not isinstance(tendon_action, RelativeTendonLengthAction):
+      raise TypeError(
+        f"Action '{tendon_action_name}' must be RelativeTendonLengthAction."
+      )
+    tendon_centers = torch.full(
+      (len(env_ids),), torch.nan, device=env.device, dtype=torch.float32
+    )
+    if tracking:
+      tendon_centers.fill_(_TRACKING_TENDON_REFERENCE)
+    tendon_action.set_reset_target_center(env_ids, tendon_centers)
+
+    if tracking:
+      assert object_reset is not None
+      palm_position = self._tracking_palm_position(
+        env,
+        env_ids,
+        shape_ids,
+        object_reset.latest_root_pose[env_ids],
+        palm_height_joint_name,
+      )
+    else:
+      palm_position = self._random_palm_position(
+        env_ids,
+        palm_height_joint_name,
+        palm_height_range,
+        palm_joint_ranges,
+      )
+    palm_limits = soft_joint_pos_limits[env_ids[:, None], self._palm_joint_ids[None, :]]
+    palm_position.clamp_(palm_limits[..., 0], palm_limits[..., 1])
+    self._asset.write_joint_state_to_sim(
       palm_position,
+      torch.zeros_like(palm_position),
       joint_ids=self._palm_joint_ids,
       env_ids=env_ids,
     )
     self._asset.data.joint_pos_target[
       env_ids[:, None], self._palm_joint_ids[None, :]
     ] = palm_position
-    palm_height = torch.empty(len(env_ids), 1, device=env.device).uniform_(
-      *palm_height_range
+
+  @staticmethod
+  def _object_reset_term(
+    env: ManagerBasedRlEnv,
+    object_pose_event_name: str,
+  ) -> reset_primitive_object_pose:
+    object_event_cfg = env.event_manager.get_term_cfg(object_pose_event_name)
+    if not isinstance(object_event_cfg.func, reset_primitive_object_pose):
+      raise TypeError(
+        f"Event '{object_pose_event_name}' must use reset_primitive_object_pose."
+      )
+    return object_event_cfg.func
+
+  def _tracking_palm_position(
+    self,
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor,
+    shape_ids: torch.Tensor,
+    object_pose_w: torch.Tensor,
+    palm_height_joint_name: str,
+  ) -> torch.Tensor:
+    del palm_height_joint_name
+    capsule = shape_ids == _CAPSULE
+    palm_reference = (
+      object_pose_w.new_tensor(_BOX_SPHERE_PALM_REFERENCE)
+      .expand(len(env_ids), -1)
+      .clone()
     )
-    palm_height_limits = self._asset.data.soft_joint_pos_limits[
-      env_ids[:, None], self._palm_height_joint_id[None, :]
+    palm_reference[capsule] = object_pose_w.new_tensor(_CAPSULE_PALM_REFERENCE)
+    object_reference_height = object_pose_w.new_full(
+      (len(env_ids),), _BOX_SPHERE_OBJECT_REFERENCE_HEIGHT
+    )
+    object_reference_height[capsule] = _CAPSULE_OBJECT_REFERENCE_HEIGHT
+
+    relative_translation = palm_reference[:, :3].clone()
+    relative_translation[:, 2] -= object_reference_height
+    rotated_translation = quat_apply(object_pose_w[:, 3:7], relative_translation)
+
+    table_heights = get_table_heights(env, "reset_table_height")
+    object_position_b = object_pose_w[:, :3] - env.scene.env_origins[env_ids]
+    object_position_b[:, 2] -= table_heights[env_ids]
+    palm_translation = object_position_b + rotated_translation
+
+    object_rotation = matrix_from_quat(object_pose_w[:, 3:7])
+    palm_base_rotation = self._palm_base_rotation.to(object_pose_w).expand(
+      len(env_ids), -1, -1
+    )
+    palm_reference_rotation = _matrix_from_intrinsic_xyz(palm_reference[:, 3:6])
+    palm_joint_rotation = (
+      palm_base_rotation.transpose(-1, -2)
+      @ object_rotation
+      @ palm_base_rotation
+      @ palm_reference_rotation
+    )
+    palm_rotation = _intrinsic_xyz_from_matrix(palm_joint_rotation)
+    return torch.cat((palm_translation, palm_rotation), dim=-1)
+
+  def _random_palm_position(
+    self,
+    env_ids: torch.Tensor,
+    palm_height_joint_name: str,
+    palm_height_range: tuple[float, float],
+    palm_joint_ranges: dict[str, tuple[float, float]],
+  ) -> torch.Tensor:
+    default_position = self._asset.data.default_joint_pos[
+      env_ids[:, None], self._palm_joint_ids[None, :]
     ]
-    palm_height.clamp_(
-      palm_height_limits[..., 0],
-      palm_height_limits[..., 1],
+    offsets = torch.stack(
+      [
+        torch.empty(len(env_ids), device=default_position.device).uniform_(
+          *(
+            palm_height_range
+            if name == palm_height_joint_name
+            else palm_joint_ranges[name]
+          )
+        )
+        for name in _PALM_JOINT_NAMES
+      ],
+      dim=-1,
     )
-    self._asset.write_joint_state_to_sim(
-      palm_height,
-      torch.zeros_like(palm_height),
-      joint_ids=self._palm_height_joint_id,
-      env_ids=env_ids,
-    )
-    self._asset.data.joint_pos_target[
-      env_ids[:, None], self._palm_height_joint_id[None, :]
-    ] = palm_height
+    height_column = _PALM_JOINT_NAMES.index(palm_height_joint_name)
+    offsets[:, height_column] -= default_position[:, height_column]
+    return default_position + offsets
 
 
 class reset_primitive_object_pose:
@@ -289,6 +595,10 @@ class reset_primitive_object_pose:
     )
     self.shape_ids = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
     self.sizes = self._base_sizes[0].expand(env.num_envs, -1).clone()
+    self.latest_root_pose = torch.zeros(
+      env.num_envs, 7, device=env.device, dtype=torch.float32
+    )
+    self.latest_root_pose[:, 3] = 1.0
     self._slot_sizes = self._base_sizes[None, :, :].expand(env.num_envs, -1, -1).clone()
     self._slot_cache_stage = torch.full(
       (env.num_envs,), -1, dtype=torch.int8, device=env.device
@@ -316,7 +626,7 @@ class reset_primitive_object_pose:
     object_name: str,
     position_center: tuple[float, float],
     position_noise: tuple[float, float],
-    capsule_roll_range: tuple[float, float],
+    capsule_yaw_range: tuple[float, float],
     box_yaw_range: tuple[float, float],
     curriculum_stage: int,
     table_height_event_name: str,
@@ -332,21 +642,22 @@ class reset_primitive_object_pose:
     xy_center = torch.tensor(position_center, device=env.device)
     fraction = primitive_randomization_fraction(curriculum_stage)
     xy_noise = torch.tensor(position_noise, device=env.device) * fraction
-    roll = torch.zeros(num_resets, device=env.device)
-    yaw = torch.zeros_like(roll)
+    yaw = torch.zeros(num_resets, device=env.device)
     capsule = self.shape_ids[env_ids] == _CAPSULE
     box = self.shape_ids[env_ids] == _BOX
-    if curriculum_stage >= 2:
+    sphere = self.shape_ids[env_ids] == _SPHERE
+    if curriculum_stage >= ORIENTATION_RANDOMIZATION_STAGE:
       if capsule.any():
-        roll[capsule] = torch.empty(
+        yaw[capsule] = torch.empty(
           int(capsule.sum().item()), device=env.device
-        ).uniform_(capsule_roll_range[0] * fraction, capsule_roll_range[1] * fraction)
-      if box.any():
-        yaw[box] = torch.empty(int(box.sum().item()), device=env.device).uniform_(
-          box_yaw_range[0] * fraction, box_yaw_range[1] * fraction
-        )
-    zeros = torch.zeros_like(roll)
-    active_orientation = quat_from_euler_xyz(roll, zeros, yaw)
+        ).uniform_(capsule_yaw_range[0] * fraction, capsule_yaw_range[1] * fraction)
+      yaw_shape = box | sphere
+      if yaw_shape.any():
+        yaw[yaw_shape] = torch.empty(
+          int(yaw_shape.sum().item()), device=env.device
+        ).uniform_(box_yaw_range[0] * fraction, box_yaw_range[1] * fraction)
+    zeros = torch.zeros_like(yaw)
+    active_orientation = quat_from_euler_xyz(zeros, zeros, yaw)
 
     active_position = torch.zeros(num_resets, 3, device=env.device)
     active_position[:, :2] = (
@@ -354,18 +665,13 @@ class reset_primitive_object_pose:
     )
     table_heights = get_table_heights(env, table_height_event_name)
     floor_offsets = self._floor_offsets(env_ids)
-    if capsule.any():
-      capsule_sizes = self.sizes[env_ids[capsule]]
-      floor_offsets[capsule] = (
-        capsule_sizes[:, 0] + capsule_sizes[:, 1] * torch.sin(roll[capsule]).abs()
-      )
     active_position[:, 2] = (
       table_heights[env_ids] + floor_offsets + float(table_clearance)
     )
     active_position += env.scene.env_origins[env_ids]
-    self.object.write_root_link_pose_to_sim(
-      torch.cat((active_position, active_orientation), dim=-1), env_ids=env_ids
-    )
+    active_pose = torch.cat((active_position, active_orientation), dim=-1)
+    self.latest_root_pose[env_ids] = active_pose
+    self.object.write_root_link_pose_to_sim(active_pose, env_ids=env_ids)
     self.object.write_root_link_velocity_to_sim(
       torch.zeros(num_resets, 6, device=env.device), env_ids=env_ids
     )
@@ -373,7 +679,7 @@ class reset_primitive_object_pose:
   def _apply_curriculum_stage(
     self, env: ManagerBasedRlEnv, env_ids: torch.Tensor, stage: int
   ) -> None:
-    if stage <= 2:
+    if stage == 0:
       update_env_ids = env_ids[self._applied_stage[env_ids] != stage]
       if len(update_env_ids) == 0:
         return
@@ -439,7 +745,7 @@ class reset_primitive_object_pose:
 
   def _sample_primitives(self, env_ids: torch.Tensor, stage: int) -> None:
     count = len(env_ids)
-    if stage <= 2:
+    if stage == 0:
       self.shape_ids[env_ids] = _BOX
       self.sizes[env_ids] = self._base_sizes[_BOX]
       return
@@ -459,11 +765,14 @@ class reset_primitive_object_pose:
   ) -> torch.Tensor:
     count = len(shape_ids)
     fraction = primitive_randomization_fraction(stage)
-    minimum = torch.full((count, 1), BOX_SPHERE_SCALE_RANGE[0], device=shape_ids.device)
-    maximum = torch.full((count, 1), BOX_SPHERE_SCALE_RANGE[1], device=shape_ids.device)
+    minimum = torch.full((count, 1), BOX_SCALE_RANGE[0], device=shape_ids.device)
+    maximum = torch.full((count, 1), BOX_SCALE_RANGE[1], device=shape_ids.device)
     capsule = shape_ids == _CAPSULE
+    sphere = shape_ids == _SPHERE
     minimum[capsule] = CAPSULE_SCALE_RANGE[0]
     maximum[capsule] = CAPSULE_SCALE_RANGE[1]
+    minimum[sphere] = SPHERE_SCALE_RANGE[0]
+    maximum[sphere] = SPHERE_SCALE_RANGE[1]
     minimum = 1.0 + fraction * (minimum - 1.0)
     maximum = 1.0 + fraction * (maximum - 1.0)
     scales = (

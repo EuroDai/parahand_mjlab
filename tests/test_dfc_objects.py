@@ -50,11 +50,11 @@ from mjlab.tasks.parahand_grasp.rl.runner import (
 )
 
 
-def _assert_stage_seven_randomization(cfg) -> None:
-  assert cfg.events["reset_gravity"].params["curriculum_stage"] == 7
-  assert cfg.events["reset_table_height"].params["curriculum_stage"] == 7
+def _assert_final_primitive_randomization(cfg) -> None:
+  assert cfg.events["reset_gravity"].params["curriculum_stage"] == 5
+  assert cfg.events["reset_table_height"].params["curriculum_stage"] == 5
   robot_cfg = cfg.events["reset_robot_joints"].params
-  assert robot_cfg["curriculum_stage"] == 7
+  assert robot_cfg["curriculum_stage"] == 5
   assert robot_cfg["position_range"] == (-0.5, 0.5)
   assert robot_cfg["palm_height_range"] == pytest.approx((0.2, 0.4))
   assert robot_cfg["palm_joint_ranges"] == {
@@ -241,7 +241,7 @@ def test_make_dfc_eval_env_cfg_is_eval_only(dfc_dataset: Path):
   assert reset_cfg.func.__name__ == "reset_dropped_mesh_object_pose"
   assert reset_cfg.params["drop_height_range"] == (0.10, 0.15)
   assert reset_cfg.params["table_height_event_name"] == "reset_table_height"
-  _assert_stage_seven_randomization(eval_cfg)
+  _assert_final_primitive_randomization(eval_cfg)
 
 
 def test_make_dfc_eval_env_cfg_can_retain_critic_for_viewer(dfc_dataset: Path):
@@ -284,7 +284,7 @@ def test_make_dataset_train_env_cfg_uses_random_drop_reset(dfc_dataset: Path):
   assert reset_cfg.params["clearance"] == 0.003
   assert reset_cfg.params["table_height_event_name"] == "reset_table_height"
   assert stage2_cfg.curriculum == {}
-  _assert_stage_seven_randomization(stage2_cfg)
+  _assert_final_primitive_randomization(stage2_cfg)
   command_cfg = stage2_cfg.commands["object_pose"]
   assert isinstance(command_cfg, LiftingCommandCfg)
   target_range = command_cfg.target_position_range
@@ -315,9 +315,9 @@ def test_play_stage_two_builds_configured_dataset_environment(dfc_dataset: Path)
   reset_cfg = stage2_cfg.events["reset_object_pose"]
   assert reset_cfg.func.__name__ == "reset_dropped_mesh_object_pose"
   assert reset_cfg.params["drop_height_range"] == (0.10, 0.15)
-  assert stage2_cfg.events["reset_gravity"].params["curriculum_stage"] == 7
+  assert stage2_cfg.events["reset_gravity"].params["curriculum_stage"] == 5
   assert stage2_cfg.curriculum == {}
-  _assert_stage_seven_randomization(stage2_cfg)
+  _assert_final_primitive_randomization(stage2_cfg)
 
 
 def test_play_unseen_test_builds_viewable_eval_environment(dfc_dataset: Path):
@@ -335,7 +335,7 @@ def test_play_unseen_test_builds_viewable_eval_environment(dfc_dataset: Path):
   assert eval_cfg.rewards["object_point_cloud_debug"].weight == 0.0
   assert list(eval_cfg.metrics) == ["unseen_success"]
   assert eval_cfg.commands["object_pose"].debug_vis is True
-  _assert_stage_seven_randomization(eval_cfg)
+  _assert_final_primitive_randomization(eval_cfg)
 
 
 def test_play_unseen_test_is_value_free_flag():
@@ -357,15 +357,15 @@ def test_play_disables_training_time_unseen_evaluator():
   assert agent_cfg.unseen_eval is True
 
 
-def test_train_curriculum_stage_eight_enables_dataset_stage():
+def test_train_curriculum_stage_six_enables_dataset_stage():
   env_cfg = parahand_only_grasp_object_env_cfg()
   agent_cfg = parahand_only_grasp_object_ppo_runner_cfg()
-  cfg = TrainConfig(env=env_cfg, agent=agent_cfg, curriculum_stage=8)
+  cfg = TrainConfig(env=env_cfg, agent=agent_cfg, curriculum_stage=6)
 
   _prepare_training_curriculum_stage(cfg)
 
   assert agent_cfg.stage2_start_immediately is True
-  _assert_stage_seven_randomization(env_cfg)
+  _assert_final_primitive_randomization(env_cfg)
 
 
 def test_train_curriculum_stage_sets_live_curriculum_term():
