@@ -26,11 +26,11 @@ Added
   object-contact force magnitude of each episode.
 - Added ``play --curriculum-stage`` to force ParaHand grasp evaluation to use a
   specific curriculum lesson without restarting the online promotion history.
-  Stage 6 playback constructs the configured DFCData or RobustDexGrasp mesh
+  Stage 7 playback constructs the configured DFCData or RobustDexGrasp mesh
   environment instead of trying to apply a primitive reset stage.
 - Added a shared ``--curriculum-stage`` interface to ``train`` and ``play``.
-  ParaHand stages 0--5 select the corresponding primitive lesson, while Stage 6
-  starts the mesh dataset phase with Stage 5 primitive rehearsal.
+  ParaHand stages 0--6 select the corresponding primitive lesson, while Stage 7
+  starts the mesh dataset phase with Stage 6 primitive rehearsal.
 - Added a project-level ParaHand rollout tool that collects complete batched
   episodes, indexes them by individual termination reason, and replays selected
   trajectories interactively in Viser without rerunning the policy.
@@ -45,7 +45,7 @@ Added
   CoACD collision parts, samples fixed 1024-point unit clouds, and records the
   ordered train and seen/unseen test object-scale entries in one manifest.
 - Added periodic ParaHand evaluation on the processed DFCData unseen split.
-  Starting at curriculum Stage 2, every 300 PPO updates rank zero runs one
+  Starting at curriculum Stage 3, every 300 PPO updates rank zero runs one
   deterministic episode per object-scale variant, keeps these rollouts out of
   PPO, and logs only ``eval/unseen_success_rate``.
 - Added ``play --unseen-test`` for viewing the configured ParaHand DFCData
@@ -56,34 +56,51 @@ Added
   deterministic rank-disjoint shards and rotated periodically. Dataset objects
   reset with random XY and SO(3) orientation and are released above their oriented
   support plane. Complete PPO updates alternate between the dataset environment
-  and the fully randomized analytic Stage 5 environment, with 25% primitive
+  and the fully randomized analytic Stage 6 environment, with 25% primitive
   rehearsal by default.
 - Added a per-environment analytic tabletop for ParaHand grasp training. Its
   0.8 m square surface randomizes from 0.6 to 1.0 m at reset. The standalone hand
-  tracks primitive objects through Stage 4 and uses its 0.2--0.4 m independent
-  Palm-height reset in Stage 5. Primitive objects rest on the table, and dataset
+  tracks primitive objects through Stage 5 and uses its 0.2--0.4 m independent
+  Palm-height reset in Stage 6. Primitive objects rest on the table, and dataset
   objects release 0.10--0.15 m above it using their oriented point-cloud support.
+- Added concrete ``Curriculum/object_lesson`` diagnostics for configured shape
+  percentages, gravity, Palm reset mode, nominal-size deviations in meters, and
+  configured object, table, joint, Palm, tendon, and physics randomization ranges.
+- Added curriculum-scaled actor point-cloud noise. It grows from zero in the
+  fixed-size lessons to zero-mean Gaussian noise with a 1 mm per-axis standard
+  deviation at full randomization, while critic point clouds remain uncorrupted.
+- Added curriculum-scaled physical domain randomization for the ParaHand teacher:
+  object density scales by 0.75--1.25, object COM shifts by up to 2 mm per axis,
+  object and table friction scale by 0.7--1.3 and 0.8--1.2, robot damping scales
+  by 0.8--1.2, actuator gains and effort limits scale by 0.9--1.1, and gravity
+  magnitude and tilt vary by 1% and 1 degree. Curriculum metrics report these
+  configured ranges directly.
 
 Changed
 ^^^^^^^
 
+- ParaHand curriculum diagnostics no longer retain per-episode shape, size, reset,
+  or physics histories or calculate their means and standard deviations. Only the
+  success history required for lesson promotion remains.
 - ParaHand joint-position and tendon-length action targets now linearly ramp from
   the prior emitted target to the policy target over each physics decimation interval.
 - All ParaHand primitive curriculum stages now use a 4096-episode success window
-  and permit promotion after 1024 completed episodes. Stage 0--5 promotion
-  thresholds are now 85%, 80%, 75%, 72%, 70%, and 70%, respectively.
+  and permit promotion after 1024 completed episodes. Stage 0--6 promotion
+  thresholds are now 85%, 80%, 80%, 75%, 72%, 70%, and 70%, respectively.
 - ParaHand target positions now use their full configured XYZ randomization
   ranges in every primitive curriculum stage and in the dataset stage; the
   curriculum still progressively expands object, table, robot, and control
   randomization.
-- ParaHand Stage 6 mesh training and unseen-object evaluation now inherit the
-  complete Stage 5 table, gravity, robot, tendon-target, and actor-observation
-  randomization. Mesh drop heights are measured vertically from each randomized
-  tabletop to the object's lowest point in its sampled orientation.
+- ParaHand Stage 7 mesh training and unseen-object evaluation now inherit the
+  complete Stage 6 table, gravity, robot, tendon-target, actor-observation, and
+  physical domain randomization. Mesh drop heights are measured vertically from
+  each randomized tabletop to the object's lowest point in its sampled orientation.
+  Mesh and primitive collision geoms use the same friction and solver parameters.
 - The ParaHand primitive curriculum now begins with a fixed-size nominal box at
-  zero gravity, introduces 10% box randomization at 0.5g, adds all three
-  primitives at the same range, and then expands to 50% and 100% randomization
-  at full gravity.
+  zero gravity. Its next two zero-gravity lessons use fixed sizes and sample 75%
+  capsule with 25% box, then 75% sphere with 12.5% each capsule and box. Later
+  lessons sample all three primitives uniformly while introducing 10%
+  randomization at 0.2g, 50% at 0.5g, and 100% at full gravity.
 - ParaHand grasp policies now use a tanh-squashed Gaussian action distribution
   with the original state-independent learnable standard deviation. Environment
   actions and deterministic outputs are bounded to ``[-1, 1]``, and PPO
@@ -112,41 +129,43 @@ Changed
   control target, while tendon actions compute one target per policy step. Both hold
   their targets across all simulation substeps instead of recomputing them relative
   to the latest state at every simulation substep.
-- The ParaHand grasp curriculum uses six analytic lessons before the mesh dataset.
-  Stage 0 uses one fixed-size nominal box at zero gravity. Stage 1 adds 10%
-  box-only randomization at 0.5g; Stage 2 adds randomized capsule, box, and sphere
-  selection at the same range. Stages 3 and 4 use full gravity with 50% and 100%
-  randomization. Stage 5 retains 100% randomization but restores the original
-  independent Palm reset before promotion to dataset Stage 6.
-  In Stages 0--4, the standalone hand uses the XML ``follow_object`` frame for
+- The ParaHand grasp curriculum uses seven analytic lessons before the mesh dataset.
+  Stage 0 uses one fixed-size nominal box at zero gravity. Stage 1 uses fixed-size
+  75% capsule and 25% box sampling; Stage 2 uses fixed-size 75% sphere and 12.5%
+  each capsule and box. Stage 3 uniformly samples all three primitives with 10%
+  randomization at 0.2g, Stage 4 expands to 50% at 0.5g, and Stage 5 reaches 100%
+  randomization at full gravity. Stage 6 retains 100% randomization but restores
+  the original independent Palm reset before promotion to dataset Stage 7.
+  In Stages 0--5, the standalone hand uses the XML ``follow_object`` frame for
   boxes and spheres and a dedicated full-hand frame for capsules. The Palm
   preserves its object-relative pose across object XY, height, and yaw changes;
   active joints apply the lesson's noise, passive PIP/DIP joints use the frame
-  values, and tendon targets center at 0.021. Stage 5 retains the original reset
+  values, and tendon targets center at 0.021. Stage 6 retains the original reset
   path. Reset joint targets enforce the same ordered MCP side-swing limits as
   policy actions. Capsule radius and half-length scale
   independently from 0.5 to 2.0 times nominal, box half-extents independently
   scale from 0.5 to 1.0, and sphere radius scales from 0.5 to 1.5. All three
   primitives randomize yaw around the tabletop normal, so capsules remain lying
-  flat. The fixed-size lesson writes primitive model constants only on
-  initialization or stage transition; randomized lessons
-  refresh dimensions every 16, 16, 4, 2, and 2 reset batches. Stages 2--5 cache
-  all three primitive slots; type switches restore cached MuJoCo
+  flat. The fixed-size lessons write primitive model constants only when their
+  per-environment cache is initialized; randomized lessons refresh dimensions
+  every 16, 4, 2, and 2 reset batches. Stage 1 caches capsule and box slots, while
+  Stages 2--6 cache all three primitive slots; type switches restore cached MuJoCo
   derived constants without running ``set_const``. Each scene uses
   one fixed, uniformly distributed 256-point surface cloud; observations only
   rotate and translate those points with the object. Dataset observations
   deterministically retain 256 uniformly spaced samples from their preprocessed
   1024-point clouds, while all 1024 points remain available for oriented support
   calculations. Analytic primitives use deterministic surface sampling, while the
-  mesh path remains available for future datasets such as YCB. Point-cloud
-  observation noise is disabled. Actor and critic encode only the latest cloud
+  mesh path remains available for future datasets such as YCB. Actor point-cloud
+  noise follows the curriculum's Gaussian schedule while the critic remains clean.
+  Actor and critic encode only the latest cloud
   using a 64-128-256 PointNet in one 256-point chunk with max-and-mean pooling and
   gradient checkpointing, retain five-frame histories for the remaining state, and
   use 1024-1024-512-512 MLPs. This architecture requires training from scratch.
   Promotion uses stage-specific rolling total final-pose success rates and the
   Isaac Dexsuite Lift criterion of less than 5 cm error. Passing the fully
-  randomized primitive lesson promotes the runner to dataset Stage 6 while
-  retaining Stage 5 for primitive rehearsal.
+  randomized primitive lesson promotes the runner to dataset Stage 7 while
+  retaining Stage 6 for primitive rehearsal.
 - The standalone ParaHand PPO configuration now uses a fixed 0.0003 learning rate
   and the same scalar-standard-deviation Gaussian action distribution as the
   FR3-mounted task. Its palm translation axes now make the x and y actuator names
@@ -166,6 +185,10 @@ Changed
 Fixed
 ^^^^^
 
+- Fixed ParaHand curriculum success windows including outcomes from episodes
+  that began in the previous stage but finished after promotion. Each environment
+  now records its episode's stage, and promotion-boundary metrics report the new
+  stage's cleared window instead of the previous stage's final success rate.
 - Fixed ParaHand non-finite simulator states bypassing per-environment reset and
   leaving other distributed ranks blocked in NCCL. Full physics-state termination,
   post-reset validation and targeted retries, synchronized rollout failure
