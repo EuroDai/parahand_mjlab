@@ -185,6 +185,8 @@ Changed
 Fixed
 ^^^^^
 
+- Unified ParaHand hand-object contact impedance around the original compliant
+  contact layer for primitive and mesh objects.
 - Fixed ParaHand curriculum success windows including outcomes from episodes
   that began in the previous stage but finished after promotion. Each environment
   now records its episode's stage, and promotion-boundary metrics report the new

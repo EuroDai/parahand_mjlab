@@ -264,7 +264,7 @@ def _write_xml(
       rgba="0 0 0 0",
       friction="1.0 0.1 0.002",
       solref="0.02 1.0",
-      solimp="0.95 0.99 0.001 0.5 2.0",
+      solimp="0.9 0.95 0.001 0.5 2.0",
     )
   ET.SubElement(body, "site", name="object_center", pos="0 0 0")
   ET.SubElement(body, "site", name="object_floor", pos=f"0 0 {-floor_offset:.12g}")

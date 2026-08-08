@@ -86,6 +86,10 @@ def test_object_spec_contains_all_curriculum_primitives():
     obj.geom_type for obj in PRIMITIVE_OBJECTS
   )
   assert all(model.geom_dataid[i] == -1 for i in range(model.ngeom))
+  np.testing.assert_allclose(
+    model.geom_solimp,
+    np.tile((0.9, 0.95, 0.001, 0.5, 2.0), (model.ngeom, 1)),
+  )
 
 
 def test_mesh_object_factory_keeps_future_ycb_variant_path():
@@ -102,6 +106,7 @@ def test_table_matches_workspace_bounds():
   assert mujoco.mjtGeom(model.geom_type[0]) == mujoco.mjtGeom.mjGEOM_BOX
   assert tuple(model.geom_size[0]) == pytest.approx((0.4, 0.4, 0.025))
   assert tuple(model.geom_pos[0]) == pytest.approx((0.0, 0.0, -0.025))
+  assert model.geom_solimp[0].tolist() == pytest.approx([0.9, 0.95, 0.001, 0.5, 2.0])
 
 
 def test_object_curriculum_uses_continuously_randomized_primitives():
@@ -1251,6 +1256,10 @@ def test_parahand_only_asset_removes_demo_scene_and_builds_articulation():
   assert model.nq == 26
   assert model.nv == 26
   assert model.nu == 22
+  np.testing.assert_allclose(
+    model.geom_solimp,
+    np.tile((0.9, 0.95, 0.001, 0.5, 2.0), (model.ngeom, 1)),
+  )
   assert len(spec.keys) == 1
   assert spec.keys[0].name == "home"
   follow_key_id = mujoco.mj_name2id(
